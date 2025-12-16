@@ -31,7 +31,7 @@ fn main() {
             *frame.camera = orbit.camera();
 
             // Animate the cube: hover above the black hole and rotate
-            let hover_height = 5.0 + (frame.time * 0.5).sin() * 0.5;
+            let hover_height = 8.0 + (frame.time * 0.5).sin() * 0.5;
             let rotation = Quat::from_euler(
                 glam::EulerRot::YXZ,
                 frame.time * 0.7,
@@ -44,7 +44,7 @@ fn main() {
                 Transform::new()
                     .position(Vec3::new(0.0, hover_height, 0.0))
                     .rotation(rotation)
-                    .uniform_scale(1.5),
+                    .uniform_scale(10.0),
                 Color::rgb(0.9, 0.3, 0.2), // Red-orange cube
             );
 
