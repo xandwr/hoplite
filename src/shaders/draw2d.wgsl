@@ -44,10 +44,18 @@ fn fs_colored(in: VertexOutput) -> @location(0) vec4f {
     return in.color;
 }
 
-// Fragment shader for textured quads (fonts, sprites)
+// Fragment shader for textured quads (fonts)
 // Uses R8 texture as alpha mask
 @fragment
 fn fs_textured(in: VertexOutput) -> @location(0) vec4f {
     let alpha = textureSample(t_atlas, s_atlas, in.uv).r;
     return vec4f(in.color.rgb, in.color.a * alpha);
+}
+
+// Fragment shader for RGBA sprites
+// Samples full color and multiplies by vertex color (tint)
+@fragment
+fn fs_sprite(in: VertexOutput) -> @location(0) vec4f {
+    let tex_color = textureSample(t_atlas, s_atlas, in.uv);
+    return tex_color * in.color;
 }

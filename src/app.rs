@@ -7,6 +7,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::assets::{Assets, FontId};
 use crate::camera::Camera;
+use crate::draw2d::SpriteId;
 use crate::draw2d::{Color, Draw2d};
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
@@ -18,7 +19,7 @@ use crate::render_graph::{
     EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, MeshNode, MeshQueue,
     PostProcessNode, RenderGraph, WorldPostProcessNode,
 };
-use crate::texture::Texture;
+use crate::texture::{Sprite, Texture};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -26,6 +27,7 @@ use std::rc::Rc;
 pub struct SetupContext<'a> {
     pub gpu: &'a GpuContext,
     pub assets: &'a mut Assets,
+    pub draw: &'a mut Draw2d,
     default_font: &'a mut Option<FontId>,
     graph_builder: &'a mut Option<RenderGraph>,
     mesh_queue: &'a Rc<RefCell<MeshQueue>>,
@@ -216,6 +218,98 @@ impl<'a> SetupContext<'a> {
         let texture = Texture::minecraft_cobblestone(self.gpu, size, seed);
         self.add_texture(texture)
     }
+
+    // ========================================================================
+    // Sprite methods (2D layer)
+    // ========================================================================
+
+    /// Add a 2D sprite and return its ID.
+    pub fn add_sprite(&mut self, sprite: Sprite) -> SpriteId {
+        self.draw.add_sprite(sprite)
+    }
+
+    /// Load a 2D sprite from a file path and return its ID.
+    pub fn sprite_from_file(&mut self, path: &str) -> Result<SpriteId, image::ImageError> {
+        let sprite = Sprite::from_file(self.gpu, path)?;
+        Ok(self.add_sprite(sprite))
+    }
+
+    /// Load a 2D sprite from a file with nearest-neighbor filtering (pixel art).
+    pub fn sprite_from_file_nearest(&mut self, path: &str) -> Result<SpriteId, image::ImageError> {
+        let sprite = Sprite::from_file_nearest(self.gpu, path)?;
+        Ok(self.add_sprite(sprite))
+    }
+
+    /// Load a 2D sprite from embedded bytes and return its ID.
+    pub fn sprite_from_bytes(
+        &mut self,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<SpriteId, image::ImageError> {
+        let sprite = Sprite::from_bytes(self.gpu, bytes, label)?;
+        Ok(self.add_sprite(sprite))
+    }
+
+    /// Load a 2D sprite from embedded bytes with nearest-neighbor filtering.
+    pub fn sprite_from_bytes_nearest(
+        &mut self,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<SpriteId, image::ImageError> {
+        let sprite = Sprite::from_bytes_nearest(self.gpu, bytes, label)?;
+        Ok(self.add_sprite(sprite))
+    }
+
+    /// Create a sprite from a procedural Minecraft noise texture (for demo/debug).
+    pub fn sprite_minecraft_noise(&mut self, size: u32, seed: u32) -> SpriteId {
+        let data = generate_minecraft_noise_data(size, seed);
+        let sprite =
+            Sprite::from_rgba_nearest(self.gpu, &data, size, size, "Minecraft Noise Sprite");
+        self.add_sprite(sprite)
+    }
+}
+
+/// Helper to generate minecraft noise texture data (duplicated from Texture for Sprite use)
+fn generate_minecraft_noise_data(size: u32, seed: u32) -> Vec<u8> {
+    let mut data = vec![0u8; (size * size * 4) as usize];
+
+    let colors: &[[u8; 3]] = &[
+        [139, 90, 43],   // Brown (dirt)
+        [128, 128, 128], // Gray (stone)
+        [85, 85, 85],    // Dark gray
+        [160, 120, 60],  // Light brown
+        [100, 70, 40],   // Dark brown
+        [90, 90, 90],    // Medium gray
+        [120, 100, 70],  // Tan
+        [70, 60, 50],    // Very dark brown
+    ];
+
+    fn hash(x: u32, y: u32, seed: u32) -> u32 {
+        let mut h = seed;
+        h = h.wrapping_add(x.wrapping_mul(374761393));
+        h = h.wrapping_add(y.wrapping_mul(668265263));
+        h ^= h >> 13;
+        h = h.wrapping_mul(1274126177);
+        h ^= h >> 16;
+        h
+    }
+
+    for y in 0..size {
+        for x in 0..size {
+            let idx = ((y * size + x) * 4) as usize;
+            let h = hash(x, y, seed);
+            let color_idx = (h % colors.len() as u32) as usize;
+            let base = colors[color_idx];
+            let variation = ((hash(x + 1000, y + 1000, seed) % 30) as i32) - 15;
+
+            data[idx] = (base[0] as i32 + variation).clamp(0, 255) as u8;
+            data[idx + 1] = (base[1] as i32 + variation).clamp(0, 255) as u8;
+            data[idx + 2] = (base[2] as i32 + variation).clamp(0, 255) as u8;
+            data[idx + 3] = 255;
+        }
+    }
+
+    data
 }
 
 /// Context provided each frame for rendering.
@@ -340,6 +434,88 @@ impl Frame<'_> {
     ) {
         self.draw_mesh_textured(mesh_index, transform, Color::WHITE, texture_index);
     }
+
+    // ========================================================================
+    // Sprite methods (2D layer)
+    // ========================================================================
+
+    /// Draw a 2D sprite at the given position (native size).
+    ///
+    /// The sprite is drawn at its original pixel dimensions.
+    /// Use `sprite_scaled` for custom sizing.
+    pub fn sprite(&mut self, sprite_id: SpriteId, x: f32, y: f32) {
+        self.draw.sprite(sprite_id, x, y, Color::WHITE);
+    }
+
+    /// Draw a 2D sprite with a color tint.
+    pub fn sprite_tinted(&mut self, sprite_id: SpriteId, x: f32, y: f32, tint: Color) {
+        self.draw.sprite(sprite_id, x, y, tint);
+    }
+
+    /// Draw a 2D sprite scaled to fit a rectangle.
+    pub fn sprite_scaled(&mut self, sprite_id: SpriteId, x: f32, y: f32, w: f32, h: f32) {
+        self.draw.sprite_scaled(sprite_id, x, y, w, h, Color::WHITE);
+    }
+
+    /// Draw a 2D sprite scaled with a color tint.
+    pub fn sprite_scaled_tinted(
+        &mut self,
+        sprite_id: SpriteId,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        tint: Color,
+    ) {
+        self.draw.sprite_scaled(sprite_id, x, y, w, h, tint);
+    }
+
+    /// Draw a sub-region of a sprite (for sprite sheets).
+    ///
+    /// `src_x`, `src_y`, `src_w`, `src_h` define the source rectangle in pixels.
+    pub fn sprite_region(
+        &mut self,
+        sprite_id: SpriteId,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src_x: f32,
+        src_y: f32,
+        src_w: f32,
+        src_h: f32,
+    ) {
+        self.draw.sprite_region(
+            sprite_id,
+            x,
+            y,
+            w,
+            h,
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            Color::WHITE,
+        );
+    }
+
+    /// Draw a sub-region of a sprite with a color tint.
+    pub fn sprite_region_tinted(
+        &mut self,
+        sprite_id: SpriteId,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src_x: f32,
+        src_y: f32,
+        src_w: f32,
+        src_h: f32,
+        tint: Color,
+    ) {
+        self.draw
+            .sprite_region(sprite_id, x, y, w, h, src_x, src_y, src_w, src_h, tint);
+    }
 }
 
 /// Configuration for the app window.
@@ -424,13 +600,14 @@ where
 
     let mut app = HopliteApp::Pending {
         config,
-        setup: Some(Box::new(move |gpu, assets, mesh_queue| {
+        setup: Some(Box::new(move |gpu, assets, draw, mesh_queue| {
             let mut default_font = None;
             let mut graph_builder = None;
 
             let mut ctx = SetupContext {
                 gpu,
                 assets,
+                draw,
                 default_font: &mut default_font,
                 graph_builder: &mut graph_builder,
                 mesh_queue,
@@ -453,6 +630,7 @@ type SetupFn = Box<
     dyn FnOnce(
         &GpuContext,
         &mut Assets,
+        &mut Draw2d,
         &Rc<RefCell<MeshQueue>>,
     ) -> (
         Box<dyn FnMut(&mut Frame)>,
@@ -492,13 +670,14 @@ impl ApplicationHandler for HopliteApp {
             let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
             let gpu = GpuContext::new(window.clone());
             let mut assets = Assets::new(&gpu);
-            let draw_2d = Draw2d::new(&gpu);
+            let mut draw_2d = Draw2d::new(&gpu);
 
             // Create shared mesh queue
             let mesh_queue = Rc::new(RefCell::new(MeshQueue::new()));
 
             let setup_fn = setup.take().unwrap();
-            let (frame_fn, default_font, render_graph) = setup_fn(&gpu, &mut assets, &mesh_queue);
+            let (frame_fn, default_font, render_graph) =
+                setup_fn(&gpu, &mut assets, &mut draw_2d, &mesh_queue);
 
             *self = HopliteApp::Running {
                 window,

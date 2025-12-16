@@ -20,6 +20,9 @@ fn main() {
         // Create a procedural Minecraft-style noise texture (16x16 for that blocky look)
         let texture = ctx.texture_minecraft_noise(16, 42);
 
+        // Create a 2D sprite for the UI (same procedural texture, rendered in 2D layer)
+        let sprite = ctx.sprite_minecraft_noise(32, 123);
+
         // Camera: auto-rotate or interactive orbit
         let mut orbit = OrbitCamera::new()
             .target(Vec3::ZERO)
@@ -53,7 +56,7 @@ fn main() {
             );
 
             // Draw debug overlay
-            let y = frame.panel_titled(10.0, 10.0, 220.0, 100.0, "Debug Overlay");
+            let y = frame.panel_titled(10.0, 10.0, 220.0, 120.0, "Debug Overlay");
             frame.text(18.0, y + 8.0, &format!("FPS: {:.1}", frame.fps()));
             frame.text_color(
                 18.0,
@@ -67,6 +70,17 @@ fn main() {
                 "Minecraft cube near black hole",
                 Color::rgba(0.5, 0.8, 0.5, 1.0),
             );
+            frame.text_color(
+                18.0,
+                y + 68.0,
+                "2D sprite in corner ->",
+                Color::rgba(0.8, 0.5, 0.8, 1.0),
+            );
+
+            // Draw the 2D sprite in the bottom-right corner
+            let sprite_x = frame.width() as f32 - 80.0;
+            let sprite_y = frame.height() as f32 - 80.0;
+            frame.sprite_scaled(sprite, sprite_x, sprite_y, 64.0, 64.0);
         }
     });
 }

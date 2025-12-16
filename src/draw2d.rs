@@ -1,5 +1,10 @@
 use crate::assets::{Assets, FontId};
 use crate::gpu::GpuContext;
+use crate::texture::Sprite;
+
+/// Index into the sprite storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpriteId(pub usize);
 
 /// A rectangle in screen-space pixel coordinates.
 #[derive(Clone, Copy, Debug)]
@@ -102,6 +107,7 @@ pub struct Draw2d {
     // Pipelines
     colored_pipeline: wgpu::RenderPipeline,
     textured_pipeline: wgpu::RenderPipeline,
+    sprite_pipeline: wgpu::RenderPipeline,
 
     // Shared resources
     vertex_buffer: wgpu::Buffer,
@@ -112,9 +118,14 @@ pub struct Draw2d {
     // Per-font bind groups (cached)
     font_bind_groups: Vec<Option<wgpu::BindGroup>>,
 
+    // Sprite storage and bind groups
+    pub(crate) sprites: Vec<Sprite>,
+    sprite_bind_groups: Vec<Option<wgpu::BindGroup>>,
+
     // Current frame batches
     colored_vertices: Vec<Vertex2d>,
     text_batches: Vec<(FontId, Vec<Vertex2d>)>,
+    sprite_batches: Vec<(SpriteId, Vec<Vertex2d>)>,
 }
 
 impl Draw2d {
@@ -243,7 +254,7 @@ impl Draw2d {
             cache: None,
         });
 
-        // Textured pipeline (for fonts/sprites)
+        // Textured pipeline (for fonts - uses R8 alpha mask)
         let textured_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Draw2d Textured Pipeline"),
             layout: Some(&textured_pipeline_layout),
@@ -273,6 +284,36 @@ impl Draw2d {
             cache: None,
         });
 
+        // Sprite pipeline (for RGBA sprites)
+        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Draw2d Sprite Pipeline"),
+            layout: Some(&textured_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[Vertex2d::LAYOUT],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_sprite"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: gpu.config.format,
+                    blend: Some(blend_state),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // Vertex buffer
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Draw2d Vertex Buffer"),
@@ -284,20 +325,38 @@ impl Draw2d {
         Self {
             colored_pipeline,
             textured_pipeline,
+            sprite_pipeline,
             vertex_buffer,
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group_layout,
             font_bind_groups: Vec::new(),
+            sprites: Vec::new(),
+            sprite_bind_groups: Vec::new(),
             colored_vertices: Vec::with_capacity(1024),
             text_batches: Vec::new(),
+            sprite_batches: Vec::new(),
         }
+    }
+
+    /// Add a sprite and return its ID.
+    pub fn add_sprite(&mut self, sprite: Sprite) -> SpriteId {
+        let id = SpriteId(self.sprites.len());
+        self.sprites.push(sprite);
+        self.sprite_bind_groups.push(None); // Will be created lazily
+        id
+    }
+
+    /// Get a sprite by ID.
+    pub fn get_sprite(&self, id: SpriteId) -> Option<&Sprite> {
+        self.sprites.get(id.0)
     }
 
     /// Clear all draw calls for the new frame.
     pub fn clear(&mut self) {
         self.colored_vertices.clear();
         self.text_batches.clear();
+        self.sprite_batches.clear();
     }
 
     /// Draw a colored rectangle.
@@ -426,6 +485,154 @@ impl Draw2d {
         }
     }
 
+    /// Draw a sprite at the given position.
+    ///
+    /// The sprite is drawn at its native size. Use `sprite_scaled` for custom sizing.
+    pub fn sprite(&mut self, sprite_id: SpriteId, x: f32, y: f32, tint: Color) {
+        let Some(sprite) = self.sprites.get(sprite_id.0) else {
+            return;
+        };
+        let w = sprite.width as f32;
+        let h = sprite.height as f32;
+        self.sprite_rect(sprite_id, x, y, w, h, tint);
+    }
+
+    /// Draw a sprite scaled to fit a rectangle.
+    pub fn sprite_scaled(
+        &mut self,
+        sprite_id: SpriteId,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        tint: Color,
+    ) {
+        self.sprite_rect(sprite_id, x, y, w, h, tint);
+    }
+
+    /// Draw a sprite with a sub-region (for sprite sheets).
+    ///
+    /// `src_rect` defines the source rectangle in pixel coordinates within the sprite.
+    pub fn sprite_region(
+        &mut self,
+        sprite_id: SpriteId,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        src_x: f32,
+        src_y: f32,
+        src_w: f32,
+        src_h: f32,
+        tint: Color,
+    ) {
+        let Some(sprite) = self.sprites.get(sprite_id.0) else {
+            return;
+        };
+
+        let tex_w = sprite.width as f32;
+        let tex_h = sprite.height as f32;
+
+        // Convert source rect to UV coordinates
+        let u0 = src_x / tex_w;
+        let v0 = src_y / tex_h;
+        let u1 = (src_x + src_w) / tex_w;
+        let v1 = (src_y + src_h) / tex_h;
+
+        let c = [tint.r, tint.g, tint.b, tint.a];
+
+        // Find or create batch for this sprite
+        let batch_idx = self
+            .sprite_batches
+            .iter()
+            .position(|(id, _)| *id == sprite_id)
+            .unwrap_or_else(|| {
+                self.sprite_batches.push((sprite_id, Vec::new()));
+                self.sprite_batches.len() - 1
+            });
+
+        self.sprite_batches[batch_idx].1.extend_from_slice(&[
+            Vertex2d {
+                position: [x, y],
+                uv: [u0, v0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y],
+                uv: [u1, v0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x, y + h],
+                uv: [u0, v1],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y],
+                uv: [u1, v0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y + h],
+                uv: [u1, v1],
+                color: c,
+            },
+            Vertex2d {
+                position: [x, y + h],
+                uv: [u0, v1],
+                color: c,
+            },
+        ]);
+    }
+
+    /// Internal: draw a sprite filling a rectangle with full UV range.
+    fn sprite_rect(&mut self, sprite_id: SpriteId, x: f32, y: f32, w: f32, h: f32, tint: Color) {
+        let c = [tint.r, tint.g, tint.b, tint.a];
+
+        // Find or create batch for this sprite
+        let batch_idx = self
+            .sprite_batches
+            .iter()
+            .position(|(id, _)| *id == sprite_id)
+            .unwrap_or_else(|| {
+                self.sprite_batches.push((sprite_id, Vec::new()));
+                self.sprite_batches.len() - 1
+            });
+
+        self.sprite_batches[batch_idx].1.extend_from_slice(&[
+            Vertex2d {
+                position: [x, y],
+                uv: [0.0, 0.0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y],
+                uv: [1.0, 0.0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x, y + h],
+                uv: [0.0, 1.0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y],
+                uv: [1.0, 0.0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x + w, y + h],
+                uv: [1.0, 1.0],
+                color: c,
+            },
+            Vertex2d {
+                position: [x, y + h],
+                uv: [0.0, 1.0],
+                color: c,
+            },
+        ]);
+    }
+
     /// Draw a bordered panel with optional title bar.
     ///
     /// This is a convenience method for drawing debug overlays and UI panels.
@@ -444,7 +651,7 @@ impl Draw2d {
         }
     }
 
-    /// Ensure we have bind groups for all loaded fonts.
+    /// Ensure we have bind groups for all loaded fonts and sprites.
     pub(crate) fn update_font_bind_groups(&mut self, gpu: &GpuContext, assets: &Assets) {
         // Grow the bind group cache if needed
         while self.font_bind_groups.len() < assets.fonts.len() {
@@ -469,6 +676,36 @@ impl Draw2d {
                     ],
                 });
                 self.font_bind_groups[i] = Some(bind_group);
+            }
+        }
+
+        // Create bind groups for any new sprites
+        for (i, sprite) in self.sprites.iter().enumerate() {
+            if self
+                .sprite_bind_groups
+                .get(i)
+                .map(|bg| bg.is_none())
+                .unwrap_or(true)
+            {
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Sprite Bind Group"),
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&sprite.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sprite.sampler),
+                        },
+                    ],
+                });
+                if i >= self.sprite_bind_groups.len() {
+                    self.sprite_bind_groups.push(Some(bind_group));
+                } else {
+                    self.sprite_bind_groups[i] = Some(bind_group);
+                }
             }
         }
     }
@@ -519,6 +756,35 @@ impl Draw2d {
             );
 
             render_pass.set_pipeline(&self.textured_pipeline);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(offset as u32..(offset + vertices.len()) as u32, 0..1);
+
+            offset += vertices.len();
+        }
+
+        // Render sprite batches
+        for (sprite_id, vertices) in &self.sprite_batches {
+            if vertices.is_empty() {
+                continue;
+            }
+
+            let Some(bind_group) = self
+                .sprite_bind_groups
+                .get(sprite_id.0)
+                .and_then(|bg| bg.as_ref())
+            else {
+                continue;
+            };
+
+            gpu.queue.write_buffer(
+                &self.vertex_buffer,
+                (offset * std::mem::size_of::<Vertex2d>()) as u64,
+                bytemuck::cast_slice(vertices),
+            );
+
+            render_pass.set_pipeline(&self.sprite_pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_bind_group(1, bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));

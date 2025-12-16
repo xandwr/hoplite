@@ -11,6 +11,18 @@ pub struct Texture {
     pub height: u32,
 }
 
+/// A 2D sprite for UI/HUD rendering.
+///
+/// Sprites are rendered in the 2D layer on top of the 3D scene.
+/// They use screen-space pixel coordinates.
+#[derive(Debug)]
+pub struct Sprite {
+    pub(crate) view: wgpu::TextureView,
+    pub(crate) sampler: wgpu::Sampler,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl Texture {
     /// Create a texture from raw RGBA data.
     pub fn from_rgba(gpu: &GpuContext, data: &[u8], width: u32, height: u32, label: &str) -> Self {
@@ -205,5 +217,140 @@ impl Texture {
         h = h.wrapping_mul(1274126177);
         h ^= h >> 16;
         h
+    }
+}
+
+impl Sprite {
+    /// Create a sprite from raw RGBA data.
+    pub fn from_rgba(gpu: &GpuContext, data: &[u8], width: u32, height: u32, label: &str) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let texture = gpu.device.create_texture_with_data(
+            &gpu.queue,
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            data,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Use linear filtering for smooth sprites (can be changed to Nearest for pixel art)
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(&format!("{} Sampler", label)),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            view,
+            sampler,
+            width,
+            height,
+        }
+    }
+
+    /// Create a sprite with nearest-neighbor filtering (pixel art style).
+    pub fn from_rgba_nearest(
+        gpu: &GpuContext,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        label: &str,
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let texture = gpu.device.create_texture_with_data(
+            &gpu.queue,
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            data,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(&format!("{} Sampler", label)),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            view,
+            sampler,
+            width,
+            height,
+        }
+    }
+
+    /// Load a sprite from an image file.
+    pub fn from_file(gpu: &GpuContext, path: &str) -> Result<Self, image::ImageError> {
+        let img = image::open(path)?.to_rgba8();
+        let (width, height) = img.dimensions();
+        Ok(Self::from_rgba(gpu, &img, width, height, path))
+    }
+
+    /// Load a sprite from an image file with nearest-neighbor filtering.
+    pub fn from_file_nearest(gpu: &GpuContext, path: &str) -> Result<Self, image::ImageError> {
+        let img = image::open(path)?.to_rgba8();
+        let (width, height) = img.dimensions();
+        Ok(Self::from_rgba_nearest(gpu, &img, width, height, path))
+    }
+
+    /// Load a sprite from embedded bytes.
+    pub fn from_bytes(
+        gpu: &GpuContext,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<Self, image::ImageError> {
+        let img = image::load_from_memory(bytes)?.to_rgba8();
+        let (width, height) = img.dimensions();
+        Ok(Self::from_rgba(gpu, &img, width, height, label))
+    }
+
+    /// Load a sprite from embedded bytes with nearest-neighbor filtering.
+    pub fn from_bytes_nearest(
+        gpu: &GpuContext,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<Self, image::ImageError> {
+        let img = image::load_from_memory(bytes)?.to_rgba8();
+        let (width, height) = img.dimensions();
+        Ok(Self::from_rgba_nearest(gpu, &img, width, height, label))
     }
 }
