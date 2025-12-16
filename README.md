@@ -277,6 +277,7 @@ Hoplite builds on solid foundations:
 - **glam** — Fast math types (Vec3, Mat4, Quat)
 - **fontdue** — Font rasterization
 - **bytemuck** — Safe casting for GPU buffers
+- **image** — Image loading and handling
 
 ## License
 
