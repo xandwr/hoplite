@@ -1,0 +1,9 @@
+[package]
+name = "hoplite"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.24.0"
+wgpu = "27.0.1"
+winit = "0.30.12"
