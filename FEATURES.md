@@ -26,12 +26,21 @@
 ## 3D Rendering
 
 - **Mesh pipeline** — Depth-tested 3D mesh rendering
-- **Texture Support** — Images and shit...
+- **Textured meshes** — Apply textures to 3D meshes with UV mapping
 - **Built-in primitives** — Cube, sphere, and plane meshes
 - **Custom meshes** — Create meshes from vertex data
 - **Transform system** — Position, rotation, scale via builder pattern
 - **Per-mesh coloring** — Tint meshes at draw time
 - **Pipeline integration** — Meshes respect effect and post-process passes
+
+## Textures & Sprites
+
+- **Texture loading** — Load from files, bytes, or raw RGBA data
+- **Procedural textures** — Built-in Minecraft-style generators (noise, grass, cobblestone)
+- **2D Sprites** — Screen-space sprite rendering with the 2D layer
+- **Sprite regions** — Draw sub-regions of sprites for sprite sheets/atlases
+- **Filtering modes** — Linear (smooth) or nearest-neighbor (pixel art) filtering
+- **Tinting** — Color-multiply sprites at draw time
 
 ## Camera System
 
@@ -123,7 +132,6 @@ src/
 
 ## Planned
 
-- [ ] Texture loading and sprite rendering
 - [ ] Audio playback
 - [ ] More mesh primitives (cylinder, torus, custom OBJ loading)
 - [ ] Render-to-texture for offscreen rendering

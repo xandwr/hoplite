@@ -68,6 +68,41 @@ run(|ctx| {
 
 Meshes render with depth testing, respecting effect passes and post-processing in the pipeline.
 
+### Textured Meshes
+
+```rust
+run(|ctx| {
+    ctx.enable_mesh_rendering();
+    let cube = ctx.mesh_cube();
+    let tex = ctx.texture_minecraft_cobblestone(16, 42);
+
+    move |frame| {
+        frame.draw_mesh_textured(cube, Transform::new(), Color::WHITE, tex);
+    }
+});
+```
+
+### 2D Sprites
+
+```rust
+run(|ctx| {
+    let sprite = ctx.sprite_from_file("assets/icon.png").unwrap();
+
+    move |frame| {
+        // Draw at position
+        frame.sprite(sprite, 10.0, 10.0);
+
+        // Draw scaled with tint
+        frame.sprite_scaled_tinted(sprite, 100.0, 100.0, 64.0, 64.0, Color::rgb(1.0, 0.5, 0.5));
+
+        // Draw a region (for sprite sheets)
+        frame.sprite_region(sprite, 200.0, 100.0, 32.0, 32.0, 0.0, 0.0, 16.0, 16.0);
+    }
+});
+```
+
+Sprites render in the 2D overlay layer on top of all 3D content and effects.
+
 ### Orbit Camera
 
 ```rust
@@ -163,6 +198,16 @@ cargo run --example black_hole
 | `mesh_cube()` | Create a unit cube mesh |
 | `mesh_sphere(segments, rings)` | Create a UV sphere mesh |
 | `mesh_plane(size)` | Create a flat plane mesh |
+| `add_texture(texture)` | Add a texture, returns index |
+| `texture_from_file(path)` | Load texture from file |
+| `texture_from_bytes(bytes, label)` | Load texture from memory |
+| `texture_minecraft_noise(size, seed)` | Procedural dirt/stone texture |
+| `texture_minecraft_grass(size, seed)` | Procedural grass texture |
+| `texture_minecraft_cobblestone(size, seed)` | Procedural cobblestone texture |
+| `add_sprite(sprite)` | Add a sprite, returns SpriteId |
+| `sprite_from_file(path)` | Load sprite from file (linear filtering) |
+| `sprite_from_file_nearest(path)` | Load sprite from file (pixel art) |
+| `sprite_from_bytes(bytes, label)` | Load sprite from memory |
 
 ### Frame Context (`Frame`)
 
@@ -176,6 +221,12 @@ cargo run --example black_hole
 | `panel(x, y, w, h)` | Draw a bordered panel |
 | `panel_titled(x, y, w, h, title)` | Panel with title bar |
 | `draw_mesh(index, transform, color)` | Draw a 3D mesh |
+| `draw_mesh_textured(index, transform, color, tex)` | Draw a textured 3D mesh |
+| `sprite(id, x, y)` | Draw sprite at position |
+| `sprite_tinted(id, x, y, tint)` | Draw sprite with color tint |
+| `sprite_scaled(id, x, y, w, h)` | Draw sprite at custom size |
+| `sprite_scaled_tinted(id, x, y, w, h, tint)` | Draw scaled sprite with tint |
+| `sprite_region(id, x, y, w, h, sx, sy, sw, sh)` | Draw sprite sub-region |
 
 ### Frame Fields
 
