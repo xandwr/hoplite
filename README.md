@@ -1,77 +1,232 @@
 # Hoplite
 
-> Code for the screen, not the platform, with
-> a single, unyielding dependency.
+**A creative coding framework for Rust that gets out of your way.**
 
-```rs
+Write shaders, render 3D scenes, and build visualizations with a single closure. No boilerplate, no ceremony—just code for the screen.
+
+```rust
 use hoplite::*;
 
 fn main() {
-    run(|canvas| {
-        canvas.background(BLACK);
-        canvas.circle(100, 100, 50);
+    run(|ctx| {
+        ctx.default_font(16.0);
+        ctx.hot_effect_world("shaders/nebula.wgsl");
+
+        move |frame| {
+            frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+        }
     });
 }
 ```
 
-> One closure, one call.
+## Philosophy
 
-## The escape hatch...
+Hoplite is built on three principles:
 
-```rs
-run_with(Config { width: 800, height: 600, title: "My Game" }, |canvas| {
-    // same API
+1. **One closure, one call** — Your setup and frame logic live in closures. No trait implementations, no engine lifecycle to memorize.
+
+2. **Hot reload everything** — Edit your WGSL shaders and watch them update instantly. No restart required.
+
+3. **Escape hatches everywhere** — Start simple, access the full wgpu API when you need it.
+
+## Features
+
+### Shader-First Rendering
+
+```rust
+run(|ctx| {
+    // Background effect rendered every frame
+    ctx.hot_effect_world("shaders/starfield.wgsl");
+
+    // Post-processing that reads the previous pass
+    ctx.hot_post_process("shaders/bloom.wgsl");
+
+    move |frame| { /* your frame logic */ }
 });
 ```
 
-## My "sane" defaults
+Effects and post-process passes chain automatically. The render graph handles ping-pong buffers, texture binding, and presentation.
 
-1. Coordinates are just numbers.
+### 3D Mesh Rendering
 
-```rs
-canvas.rect(10, 20, 100, 50); // no more Rect::new(), no Point { x, y }, no bullshit
+```rust
+run(|ctx| {
+    ctx.enable_mesh_rendering();
+    let cube = ctx.mesh_cube();
+    let sphere = ctx.mesh_sphere(32, 16);
+
+    move |frame| {
+        frame.draw_mesh(cube, Transform::new()
+            .position(Vec3::new(0.0, 2.0, 0.0))
+            .rotation(Quat::from_rotation_y(frame.time))
+            .uniform_scale(1.5),
+            Color::rgb(0.9, 0.3, 0.2)
+        );
+    }
+});
 ```
 
-2. Colors are words first, values second
+Meshes render with depth testing, respecting effect passes and post-processing in the pipeline.
 
-```rs
-canvas.fill(RED);
-canvas.fill(rgb(255, 128, 0));
-canvas.fill("#ff8800"); // why not
+### Orbit Camera
+
+```rust
+let mut orbit = OrbitCamera::new()
+    .target(Vec3::ZERO)
+    .distance(10.0)
+    .fov(75.0)
+    .mode(OrbitMode::Interactive);  // or AutoRotate { speed: 0.5 }
+
+move |frame| {
+    orbit.update(frame.input, frame.dt);
+    *frame.camera = orbit.camera();
+}
 ```
 
-3. State is implicit (like Processing)
+Interactive mode: drag to rotate, scroll to zoom. Auto-rotate mode for demos and visualizations.
 
-```rs
-canvas.fill(BLUE);
-canvas.stroke(WHITE);
-canvas.stroke_weight(3);
-canvas.rect(10, 10, 100, 100); // uses current fill/stroke
+### Immediate-Mode 2D
+
+```rust
+move |frame| {
+    // Simple primitives
+    frame.rect(10.0, 10.0, 100.0, 50.0, Color::rgba(0.2, 0.2, 0.2, 0.8));
+    frame.text(20.0, 20.0, "Hello, Hoplite!");
+
+    // Debug panels with title bars
+    let y = frame.panel_titled(10.0, 100.0, 200.0, 150.0, "Debug");
+    frame.text(18.0, y + 8.0, &format!("Time: {:.1}s", frame.time));
+}
 ```
 
-4. Animation is just... returning
+All 2D draws are batched and rendered as an overlay after your render pipeline completes.
 
-```rs
+### Runtime Hot Reload
+
+Edit any `.wgsl` file passed to `hot_effect*` or `hot_post_process*` methods. Hoplite watches the filesystem and recompiles shaders on change. If compilation fails, the previous working shader stays active.
+
+```
+[hot-reload] Reloading shader: "shaders/nebula.wgsl"
+[hot-reload] Shader compiled successfully
+```
+
+## Quick Start
+
+```toml
+[dependencies]
+hoplite = { git = "https://github.com/yourname/hoplite" }
+```
+
+```rust
+use hoplite::*;
+
 fn main() {
-    let mut x = 0.0;
-    
-    run(|canvas| {
-        canvas.background(BLACK);
-        canvas.circle(x, 100, 20);
-        x += 1.0;  // state lives in the closure's environment
-    });
+    run_with_config(
+        AppConfig::new().title("My App").size(1280, 720),
+        |ctx| {
+            ctx.default_font(16.0);
+
+            // Your setup here
+
+            move |frame| {
+                // Your frame logic here
+            }
+        }
+    );
 }
 ```
 
-5. Input is really freakin' simple
+## Examples
 
-```rs
-run(|canvas| {
-    if canvas.key_down(Key::Space) {
-        // jump
-    }
-    if canvas.mouse_pressed() {
-        canvas.circle(canvas.mouse_x(), canvas.mouse_y(), 10);
-    }
-});
+Run the black hole demo with gravitational lensing:
+
+```bash
+cargo run --example black_hole
 ```
+
+## API Reference
+
+### Setup Context (`SetupContext`)
+
+| Method | Description |
+|--------|-------------|
+| `default_font(size)` | Load the default font at given pixel size |
+| `effect(shader)` | Add a screen-space effect pass |
+| `effect_world(shader)` | Add a world-space effect with camera uniforms |
+| `post_process(shader)` | Add screen-space post-processing |
+| `post_process_world(shader)` | Add world-space post-processing |
+| `hot_effect(path)` | Hot-reloadable screen-space effect |
+| `hot_effect_world(path)` | Hot-reloadable world-space effect |
+| `hot_post_process(path)` | Hot-reloadable screen-space post-process |
+| `hot_post_process_world(path)` | Hot-reloadable world-space post-process |
+| `enable_mesh_rendering()` | Enable 3D mesh pipeline |
+| `mesh_cube()` | Create a unit cube mesh |
+| `mesh_sphere(segments, rings)` | Create a UV sphere mesh |
+| `mesh_plane(size)` | Create a flat plane mesh |
+
+### Frame Context (`Frame`)
+
+| Method | Description |
+|--------|-------------|
+| `fps()` | Current frames per second |
+| `width()` / `height()` | Screen dimensions in pixels |
+| `text(x, y, str)` | Draw text at position |
+| `text_color(x, y, str, color)` | Draw colored text |
+| `rect(x, y, w, h, color)` | Draw filled rectangle |
+| `panel(x, y, w, h)` | Draw a bordered panel |
+| `panel_titled(x, y, w, h, title)` | Panel with title bar |
+| `draw_mesh(index, transform, color)` | Draw a 3D mesh |
+
+### Frame Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time` | `f32` | Total elapsed time in seconds |
+| `dt` | `f32` | Delta time since last frame |
+| `input` | `&Input` | Keyboard and mouse state |
+| `camera` | `&mut Camera` | Current camera (modify to change view) |
+| `gpu` | `&GpuContext` | Low-level GPU access |
+| `draw` | `&mut Draw2d` | Low-level 2D API |
+
+## Shader Uniforms
+
+World-space shaders receive these uniforms:
+
+```wgsl
+struct Uniforms {
+    resolution: vec2f,
+    time: f32,
+    fov: f32,
+    camera_pos: vec3f,
+    _pad1: f32,
+    camera_forward: vec3f,
+    _pad2: f32,
+    camera_right: vec3f,
+    _pad3: f32,
+    camera_up: vec3f,
+    aspect: f32,
+}
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+```
+
+Post-process shaders also get the input texture:
+
+```wgsl
+@group(0) @binding(1) var input_texture: texture_2d<f32>;
+@group(0) @binding(2) var input_sampler: sampler;
+```
+
+## Dependencies
+
+Hoplite builds on solid foundations:
+
+- **wgpu** — Cross-platform GPU abstraction
+- **winit** — Window creation and input handling
+- **glam** — Fast math types (Vec3, Mat4, Quat)
+- **fontdue** — Font rasterization
+- **bytemuck** — Safe casting for GPU buffers
+
+## License
+
+MIT
