@@ -5,5 +5,7 @@ edition = "2024"
 
 [dependencies]
 bytemuck = "1.24.0"
+hecs = "0.10.5"
+pollster = "0.4.0"
 wgpu = "27.0.1"
 winit = "0.30.12"
