@@ -8,6 +8,7 @@ bytemuck = { version = "1.24.0", features = ["derive"] }
 fontdue = "0.9"
 glam = "0.30.9"
 hecs = "0.10.5"
+image = "0.25.9"
 pollster = "0.4.0"
 wgpu = "27.0.1"
 winit = "0.30.12"

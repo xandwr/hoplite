@@ -6,6 +6,7 @@ use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPa
 use crate::mesh::{Mesh, Transform};
 use crate::mesh_pass::{DrawCall, MeshPass};
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
+use crate::texture::Texture;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -404,11 +405,13 @@ pub struct QueuedMesh {
     pub mesh_index: usize,
     pub transform: Transform,
     pub color: Color,
+    pub texture_index: Option<usize>,
 }
 
-/// Shared storage for meshes and draw queue, accessible from Frame.
+/// Shared storage for meshes, textures, and draw queue, accessible from Frame.
 pub struct MeshQueue {
     pub meshes: Vec<Mesh>,
+    pub textures: Vec<Texture>,
     pub draw_queue: Vec<QueuedMesh>,
 }
 
@@ -416,6 +419,7 @@ impl MeshQueue {
     pub fn new() -> Self {
         Self {
             meshes: Vec::new(),
+            textures: Vec::new(),
             draw_queue: Vec::new(),
         }
     }
@@ -427,12 +431,36 @@ impl MeshQueue {
         idx
     }
 
-    /// Queue a mesh for drawing this frame.
+    /// Add a texture and return its index.
+    pub fn add_texture(&mut self, texture: Texture) -> usize {
+        let idx = self.textures.len();
+        self.textures.push(texture);
+        idx
+    }
+
+    /// Queue a mesh for drawing this frame (without texture).
     pub fn draw(&mut self, mesh_index: usize, transform: Transform, color: Color) {
         self.draw_queue.push(QueuedMesh {
             mesh_index,
             transform,
             color,
+            texture_index: None,
+        });
+    }
+
+    /// Queue a textured mesh for drawing this frame.
+    pub fn draw_textured(
+        &mut self,
+        mesh_index: usize,
+        transform: Transform,
+        color: Color,
+        texture_index: usize,
+    ) {
+        self.draw_queue.push(QueuedMesh {
+            mesh_index,
+            transform,
+            color,
+            texture_index: Some(texture_index),
         });
     }
 
@@ -488,6 +516,7 @@ impl RenderNode for MeshNode {
                     mesh,
                     transform: q.transform,
                     color: q.color,
+                    texture: q.texture_index.and_then(|idx| queue.textures.get(idx)),
                 })
             })
             .collect();

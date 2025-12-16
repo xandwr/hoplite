@@ -2,6 +2,7 @@ use crate::camera::Camera;
 use crate::draw2d::Color;
 use crate::gpu::GpuContext;
 use crate::mesh::{Mesh, Transform, Vertex3d};
+use crate::texture::Texture;
 
 /// Camera uniforms for 3D rendering.
 #[repr(C)]
@@ -28,6 +29,7 @@ pub struct DrawCall<'a> {
     pub mesh: &'a Mesh,
     pub transform: Transform,
     pub color: Color,
+    pub texture: Option<&'a Texture>,
 }
 
 /// Handles 3D mesh rendering with depth testing.
@@ -44,6 +46,9 @@ pub struct MeshPass {
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group_layout: wgpu::BindGroupLayout,
     blit_sampler: wgpu::Sampler,
+    // Texture binding support
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    default_texture: Texture,
 }
 
 impl MeshPass {
@@ -120,10 +125,42 @@ impl MeshPass {
             }],
         });
 
+        // Texture bind group layout (group 2)
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Texture Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        // Create a 1x1 white default texture for untextured meshes
+        let default_texture =
+            Texture::from_rgba(gpu, &[255, 255, 255, 255], 1, 1, "Default White Texture");
+
         // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Mesh Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &model_bind_group_layout],
+            bind_group_layouts: &[
+                &camera_bind_group_layout,
+                &model_bind_group_layout,
+                &texture_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -255,7 +292,31 @@ impl MeshPass {
             blit_pipeline,
             blit_bind_group_layout,
             blit_sampler,
+            texture_bind_group_layout,
+            default_texture,
         }
+    }
+
+    /// Create a bind group for a texture.
+    pub fn create_texture_bind_group(
+        &self,
+        gpu: &GpuContext,
+        texture: &Texture,
+    ) -> wgpu::BindGroup {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Mesh Texture Bind Group"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                },
+            ],
+        })
     }
 
     fn create_depth_texture(gpu: &GpuContext) -> (wgpu::Texture, wgpu::TextureView) {
@@ -369,6 +430,12 @@ impl MeshPass {
             );
 
             render_pass.set_bind_group(1, &self.model_bind_group, &[]);
+
+            // Bind texture (use default white texture if none provided)
+            let texture = call.texture.unwrap_or(&self.default_texture);
+            let texture_bind_group = self.create_texture_bind_group(gpu, texture);
+            render_pass.set_bind_group(2, &texture_bind_group, &[]);
+
             render_pass.set_vertex_buffer(0, call.mesh.vertex_buffer.slice(..));
             render_pass
                 .set_index_buffer(call.mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

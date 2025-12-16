@@ -11,6 +11,7 @@ mod mesh_pass;
 mod orbit_camera;
 mod post_process;
 mod render_graph;
+mod texture;
 
 pub use app::{AppConfig, Frame, SetupContext, run, run_with_config};
 pub use assets::{Assets, FontAtlas, FontId};
@@ -29,6 +30,7 @@ pub use render_graph::{
     PostProcessNode, RenderContext, RenderGraph, RenderGraphBuilder, RenderNode, RenderTarget,
     WorldPostProcessNode,
 };
+pub use texture::Texture;
 
 // Re-export glam math types for convenience
 pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};

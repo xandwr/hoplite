@@ -17,6 +17,9 @@ fn main() {
         // Create a cube mesh
         let cube = ctx.mesh_cube();
 
+        // Create a procedural Minecraft-style noise texture (16x16 for that blocky look)
+        let texture = ctx.texture_minecraft_noise(16, 42);
+
         // Camera: auto-rotate or interactive orbit
         let mut orbit = OrbitCamera::new()
             .target(Vec3::ZERO)
@@ -39,17 +42,18 @@ fn main() {
                 frame.time * 0.3,
             );
 
-            frame.draw_mesh(
+            // Draw the textured cube
+            frame.draw_mesh_textured_white(
                 cube,
                 Transform::new()
                     .position(Vec3::new(0.0, hover_height, 0.0))
                     .rotation(rotation)
                     .uniform_scale(10.0),
-                Color::rgb(0.9, 0.3, 0.2), // Red-orange cube
+                texture,
             );
 
             // Draw debug overlay
-            let y = frame.panel_titled(10.0, 10.0, 180.0, 100.0, "Debug Overlay");
+            let y = frame.panel_titled(10.0, 10.0, 220.0, 100.0, "Debug Overlay");
             frame.text(18.0, y + 8.0, &format!("FPS: {:.1}", frame.fps()));
             frame.text_color(
                 18.0,
@@ -60,7 +64,7 @@ fn main() {
             frame.text_color(
                 18.0,
                 y + 48.0,
-                "Cube hovering above black hole",
+                "Minecraft cube near black hole",
                 Color::rgba(0.5, 0.8, 0.5, 1.0),
             );
         }

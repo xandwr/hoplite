@@ -18,6 +18,7 @@ use crate::render_graph::{
     EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, MeshNode, MeshQueue,
     PostProcessNode, RenderGraph, WorldPostProcessNode,
 };
+use crate::texture::Texture;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -172,6 +173,49 @@ impl<'a> SetupContext<'a> {
     pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
+
+    // ========================================================================
+    // Texture methods
+    // ========================================================================
+
+    /// Add a texture and return its index.
+    pub fn add_texture(&mut self, texture: Texture) -> usize {
+        self.mesh_queue.borrow_mut().add_texture(texture)
+    }
+
+    /// Load a texture from a file path and return its index.
+    pub fn texture_from_file(&mut self, path: &str) -> Result<usize, image::ImageError> {
+        let texture = Texture::from_file(self.gpu, path)?;
+        Ok(self.add_texture(texture))
+    }
+
+    /// Load a texture from embedded bytes and return its index.
+    pub fn texture_from_bytes(
+        &mut self,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<usize, image::ImageError> {
+        let texture = Texture::from_bytes(self.gpu, bytes, label)?;
+        Ok(self.add_texture(texture))
+    }
+
+    /// Create a procedural Minecraft-style noise texture and return its index.
+    pub fn texture_minecraft_noise(&mut self, size: u32, seed: u32) -> usize {
+        let texture = Texture::minecraft_noise(self.gpu, size, seed);
+        self.add_texture(texture)
+    }
+
+    /// Create a procedural Minecraft-style grass texture and return its index.
+    pub fn texture_minecraft_grass(&mut self, size: u32, seed: u32) -> usize {
+        let texture = Texture::minecraft_grass(self.gpu, size, seed);
+        self.add_texture(texture)
+    }
+
+    /// Create a procedural Minecraft-style cobblestone texture and return its index.
+    pub fn texture_minecraft_cobblestone(&mut self, size: u32, seed: u32) -> usize {
+        let texture = Texture::minecraft_cobblestone(self.gpu, size, seed);
+        self.add_texture(texture)
+    }
 }
 
 /// Context provided each frame for rendering.
@@ -269,6 +313,32 @@ impl Frame<'_> {
     /// Draw a 3D mesh with default white color.
     pub fn draw_mesh_white(&mut self, mesh_index: usize, transform: Transform) {
         self.draw_mesh(mesh_index, transform, Color::WHITE);
+    }
+
+    /// Draw a textured 3D mesh at the given transform with the specified color tint.
+    ///
+    /// The color acts as a tint/multiplier for the texture color.
+    /// Use `Color::WHITE` for no tinting.
+    pub fn draw_mesh_textured(
+        &mut self,
+        mesh_index: usize,
+        transform: Transform,
+        color: Color,
+        texture_index: usize,
+    ) {
+        self.mesh_queue
+            .borrow_mut()
+            .draw_textured(mesh_index, transform, color, texture_index);
+    }
+
+    /// Draw a textured 3D mesh with default white color (no tint).
+    pub fn draw_mesh_textured_white(
+        &mut self,
+        mesh_index: usize,
+        transform: Transform,
+        texture_index: usize,
+    ) {
+        self.draw_mesh_textured(mesh_index, transform, Color::WHITE, texture_index);
     }
 }
 

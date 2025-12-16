@@ -1,4 +1,4 @@
-// Standard 3D mesh shader with basic lighting
+// Standard 3D mesh shader with basic lighting and texture support
 
 struct CameraUniforms {
     view_proj: mat4x4f,
@@ -16,6 +16,8 @@ struct ModelUniforms {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(1) @binding(0) var<uniform> model: ModelUniforms;
+@group(2) @binding(0) var t_diffuse: texture_2d<f32>;
+@group(2) @binding(1) var s_diffuse: sampler;
 
 struct VertexInput {
     @location(0) position: vec3f,
@@ -48,6 +50,9 @@ fn fs(in: VertexOutput) -> @location(0) vec4f {
     let normal = normalize(in.world_normal);
     let view_dir = normalize(camera.camera_pos - in.world_pos);
 
+    // Sample texture
+    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
+
     // Simple directional light from above-right
     let light_dir = normalize(vec3f(0.5, 1.0, 0.3));
     let light_color = vec3f(1.0, 0.98, 0.95);
@@ -59,16 +64,17 @@ fn fs(in: VertexOutput) -> @location(0) vec4f {
     let ndotl = dot(normal, light_dir);
     let diffuse = ndotl * 0.5 + 0.5;
 
-    // Specular (Blinn-Phong)
+    // Specular (Blinn-Phong) - reduced for textured surfaces
     let half_vec = normalize(light_dir + view_dir);
-    let spec = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.5;
+    let spec = pow(max(dot(normal, half_vec), 0.0), 32.0) * 0.3;
 
     // Rim light for edge definition
-    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 3.0) * 0.2;
+    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 3.0) * 0.15;
 
-    let base_color = model.color.rgb;
+    // Combine texture color with model color (tint)
+    let base_color = tex_color.rgb * model.color.rgb;
     let lighting = ambient + diffuse * light_color + spec + rim;
     let final_color = base_color * lighting;
 
-    return vec4f(final_color, model.color.a);
+    return vec4f(final_color, tex_color.a * model.color.a);
 }

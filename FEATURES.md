@@ -26,6 +26,7 @@
 ## 3D Rendering
 
 - **Mesh pipeline** — Depth-tested 3D mesh rendering
+- **Texture Support** — Images and shit...
 - **Built-in primitives** — Cube, sphere, and plane meshes
 - **Custom meshes** — Create meshes from vertex data
 - **Transform system** — Position, rotation, scale via builder pattern
@@ -96,6 +97,7 @@ src/
 ├── post_process.rs # Post-processing with input texture
 ├── hot_shader.rs   # Runtime shader hot-reload
 ├── mesh.rs         # 3D vertex data and primitives
+├── texture.rs      # Texture rendering
 ├── mesh_pass.rs    # Mesh rendering pipeline
 ├── draw2d.rs       # Immediate-mode 2D rendering
 ├── camera.rs       # Camera state
@@ -117,6 +119,7 @@ src/
 | bytemuck | GPU buffer casting |
 | pollster | Async blocking |
 | hecs | ECS (available for user code) |
+| image | Image rendering |
 
 ## Planned
 
