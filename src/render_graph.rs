@@ -268,6 +268,15 @@ impl RenderGraph {
         RenderGraphBuilder::new()
     }
 
+    /// Add a node to an existing render graph, returning a new graph.
+    pub fn with_node<N: RenderNode + 'static>(mut self, node: N, gpu: &GpuContext) -> Self {
+        self.nodes.push(Box::new(node));
+        // Ensure we have render targets
+        self.target_a.ensure_size(gpu, "RenderGraph Target A");
+        self.target_b.ensure_size(gpu, "RenderGraph Target B");
+        self
+    }
+
     /// Execute the render graph, presenting to screen.
     pub fn execute(&mut self, gpu: &GpuContext, time: f32, camera: &Camera) {
         self.execute_with_ui(gpu, time, camera, |_, _| {});
