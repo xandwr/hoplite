@@ -1,40 +1,123 @@
+//! Post-processing pass infrastructure for fullscreen effects.
+//!
+//! This module provides two types of post-processing passes:
+//!
+//! - [`PostProcessPass`]: A simple post-processing pass with basic uniforms (resolution, time)
+//! - [`WorldPostProcessPass`]: An extended pass that includes camera information for world-space effects
+//!
+//! Both passes render a fullscreen triangle and sample from an input texture, making them
+//! suitable for effects like bloom, color grading, vignette, fog, and screen-space reflections.
+//!
+//! # Shader Requirements
+//!
+//! Your WGSL shader must define a vertex shader entry point `vs` and fragment shader entry point `fs`.
+//! The vertex shader should generate fullscreen triangle coordinates. A typical implementation:
+//!
+//! ```wgsl
+//! @vertex
+//! fn vs(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
+//!     let x = f32(i32(vertex_index) - 1);
+//!     let y = f32(i32(vertex_index & 1u) * 2 - 1);
+//!     return vec4f(x, y, 0.0, 1.0);
+//! }
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use hoplite::{GpuContext, PostProcessPass};
+//!
+//! let shader_source = r#"
+//!     struct Uniforms {
+//!         resolution: vec2f,
+//!         time: f32,
+//!     }
+//!     @group(0) @binding(0) var<uniform> u: Uniforms;
+//!     @group(0) @binding(1) var input_texture: texture_2d<f32>;
+//!     @group(0) @binding(2) var input_sampler: sampler;
+//!
+//!     @vertex
+//!     fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+//!         let x = f32(i32(vi) - 1);
+//!         let y = f32(i32(vi & 1u) * 2 - 1);
+//!         return vec4f(x, y, 0.0, 1.0);
+//!     }
+//!
+//!     @fragment
+//!     fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+//!         let uv = pos.xy / u.resolution;
+//!         return textureSample(input_texture, input_sampler, uv);
+//!     }
+//! "#;
+//!
+//! // let pass = PostProcessPass::new(&gpu, shader_source);
+//! ```
+
 use crate::camera::Camera;
 use crate::gpu::GpuContext;
 
 /// Standard uniforms for post-processing passes.
+///
+/// This struct is uploaded to the GPU as a uniform buffer and provides
+/// basic information needed by most post-processing shaders.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PostProcessUniforms {
+    /// Screen resolution in pixels as `[width, height]`.
     pub resolution: [f32; 2],
+    /// Elapsed time in seconds since the application started.
     pub time: f32,
+    /// Padding for 16-byte alignment (required by GPU uniform buffers).
     pub _padding: f32,
 }
 
-/// Extended uniforms for world-space post-processing (includes camera).
+/// Extended uniforms for world-space post-processing effects.
+///
+/// This struct extends `PostProcessUniforms` with camera information,
+/// enabling effects that need to reconstruct world-space positions or
+/// ray directions (e.g., volumetric fog, screen-space reflections, depth-based effects).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WorldPostProcessUniforms {
-    // Base uniforms
+    /// Screen resolution in pixels as `[width, height]`.
     pub resolution: [f32; 2],
+    /// Elapsed time in seconds since the application started.
     pub time: f32,
+    /// Camera field of view in radians.
     pub fov: f32,
-    // Camera
+    /// Camera position in world space.
     pub camera_pos: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad1: f32,
+    /// Camera forward direction (normalized).
     pub camera_forward: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad2: f32,
+    /// Camera right direction (normalized).
     pub camera_right: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad3: f32,
+    /// Camera up direction (normalized, orthogonal to forward).
     pub camera_up: [f32; 3],
+    /// Aspect ratio (width / height).
     pub aspect: f32,
 }
 
 /// A post-processing pass that samples from an input texture.
 ///
-/// The shader receives:
-/// - `u.resolution`: screen resolution
-/// - `u.time`: elapsed time
-/// - `input_texture` + `input_sampler`: the previous pass output
+/// This pass provides a simple interface for fullscreen post-processing effects.
+/// It automatically manages uniform buffers, bind groups, and pipeline state.
+///
+/// # Shader Bindings
+///
+/// Your shader receives the following bindings:
+///
+/// | Binding | Type | Description |
+/// |---------|------|-------------|
+/// | 0 | `uniform` | Uniforms with `resolution` and `time` fields |
+/// | 1 | `texture_2d<f32>` | Input texture from the previous pass |
+/// | 2 | `sampler` | Linear filtering sampler for the input texture |
+///
 pub struct PostProcessPass {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
@@ -43,9 +126,20 @@ pub struct PostProcessPass {
 }
 
 impl PostProcessPass {
-    /// Create a new post-processing pass from WGSL shader source.
+    /// Creates a new post-processing pass from WGSL shader source.
     ///
-    /// The shader should define:
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context to create resources on
+    /// * `shader_source` - WGSL shader source code
+    ///
+    /// # Shader Requirements
+    ///
+    /// The shader must define:
+    /// - A vertex entry point named `vs`
+    /// - A fragment entry point named `fs`
+    /// - The following bindings:
+    ///
     /// ```wgsl
     /// struct Uniforms {
     ///     resolution: vec2f,
@@ -55,6 +149,10 @@ impl PostProcessPass {
     /// @group(0) @binding(1) var input_texture: texture_2d<f32>;
     /// @group(0) @binding(2) var input_sampler: sampler;
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shader source fails to compile.
     pub fn new(gpu: &GpuContext, shader_source: &str) -> Self {
         let device = &gpu.device;
 
@@ -159,7 +257,15 @@ impl PostProcessPass {
         }
     }
 
-    /// Create a bind group for the given input texture.
+    /// Creates a bind group for the given input texture.
+    ///
+    /// This is useful when you need to manage bind groups manually,
+    /// for example when caching them across frames for performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context
+    /// * `input_view` - Texture view to sample from in the shader
     pub fn create_bind_group(
         &self,
         gpu: &GpuContext,
@@ -185,7 +291,18 @@ impl PostProcessPass {
         })
     }
 
-    /// Render the post-process effect.
+    /// Renders the post-processing effect to the current render pass.
+    ///
+    /// This method updates the uniform buffer with the current resolution and time,
+    /// creates a bind group for the input texture, and issues a draw call for a
+    /// fullscreen triangle (3 vertices).
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context (used for resolution and queue access)
+    /// * `render_pass` - The active render pass to draw into
+    /// * `time` - Current time in seconds (passed to shader as `u.time`)
+    /// * `input_view` - Texture view from the previous pass to sample from
     pub fn render(
         &self,
         gpu: &GpuContext,
@@ -209,15 +326,42 @@ impl PostProcessPass {
     }
 }
 
-/// A world-space post-processing pass with camera uniforms.
+/// A post-processing pass with camera uniforms for world-space effects.
 ///
-/// The shader receives:
-/// - `u.resolution`: screen resolution
-/// - `u.time`: elapsed time
-/// - `u.fov`: field of view in radians
-/// - `u.camera_pos`, `u.camera_forward`, `u.camera_right`, `u.camera_up`: camera vectors
-/// - `u.aspect`: aspect ratio
-/// - `input_texture` + `input_sampler`: the previous pass output
+/// This pass extends [`PostProcessPass`] with full camera information, enabling
+/// effects that need to reconstruct world-space positions or compute view rays.
+///
+/// # Use Cases
+///
+/// - Volumetric fog and atmospheric scattering
+/// - Screen-space reflections (SSR)
+/// - Depth-based effects (DOF, god rays)
+/// - Ray marching effects that need camera rays
+///
+/// # Shader Bindings
+///
+/// Your shader receives the following bindings:
+///
+/// | Binding | Type | Description |
+/// |---------|------|-------------|
+/// | 0 | `uniform` | Uniforms with resolution, time, and camera data |
+/// | 1 | `texture_2d<f32>` | Input texture from the previous pass |
+/// | 2 | `sampler` | Linear filtering sampler for the input texture |
+///
+/// # Example: Computing View Rays
+///
+/// ```wgsl
+/// fn get_ray_direction(uv: vec2f) -> vec3f {
+///     let ndc = uv * 2.0 - 1.0;
+///     let half_height = tan(u.fov * 0.5);
+///     let half_width = half_height * u.aspect;
+///     return normalize(
+///         u.camera_forward +
+///         u.camera_right * ndc.x * half_width +
+///         u.camera_up * ndc.y * half_height
+///     );
+/// }
+/// ```
 pub struct WorldPostProcessPass {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
@@ -226,9 +370,20 @@ pub struct WorldPostProcessPass {
 }
 
 impl WorldPostProcessPass {
-    /// Create a new world-space post-processing pass from WGSL shader source.
+    /// Creates a new world-space post-processing pass from WGSL shader source.
     ///
-    /// The shader should define:
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context to create resources on
+    /// * `shader_source` - WGSL shader source code
+    ///
+    /// # Shader Requirements
+    ///
+    /// The shader must define:
+    /// - A vertex entry point named `vs`
+    /// - A fragment entry point named `fs`
+    /// - The following bindings:
+    ///
     /// ```wgsl
     /// struct Uniforms {
     ///     resolution: vec2f,
@@ -247,6 +402,10 @@ impl WorldPostProcessPass {
     /// @group(0) @binding(1) var input_texture: texture_2d<f32>;
     /// @group(0) @binding(2) var input_sampler: sampler;
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shader source fails to compile.
     pub fn new(gpu: &GpuContext, shader_source: &str) -> Self {
         let device = &gpu.device;
 
@@ -351,7 +510,15 @@ impl WorldPostProcessPass {
         }
     }
 
-    /// Create a bind group for the given input texture.
+    /// Creates a bind group for the given input texture.
+    ///
+    /// This is useful when you need to manage bind groups manually,
+    /// for example when caching them across frames for performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context
+    /// * `input_view` - Texture view to sample from in the shader
     pub fn create_bind_group(
         &self,
         gpu: &GpuContext,
@@ -377,7 +544,19 @@ impl WorldPostProcessPass {
         })
     }
 
-    /// Render the post-process effect with camera data.
+    /// Renders the post-processing effect with camera data.
+    ///
+    /// This method updates the uniform buffer with the current resolution, time,
+    /// and camera state, creates a bind group for the input texture, and issues
+    /// a draw call for a fullscreen triangle (3 vertices).
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context (used for resolution and queue access)
+    /// * `render_pass` - The active render pass to draw into
+    /// * `time` - Current time in seconds (passed to shader as `u.time`)
+    /// * `camera` - Camera to extract position and orientation from
+    /// * `input_view` - Texture view from the previous pass to sample from
     pub fn render(
         &self,
         gpu: &GpuContext,
