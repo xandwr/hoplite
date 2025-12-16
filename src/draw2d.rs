@@ -1,21 +1,67 @@
+//! Immediate-mode 2D drawing API for sprites, text, and UI elements.
+//!
+//! This module provides a simple, batched 2D rendering system built on top of wgpu.
+//! All draw calls are collected during the frame and rendered in a single pass,
+//! minimizing GPU state changes and draw calls.
+//!
+//! # Architecture
+//!
+//! The rendering system uses three separate pipelines:
+//! - **Colored pipeline**: For solid-color rectangles (no texture sampling)
+//! - **Textured pipeline**: For font rendering (R8 alpha mask textures)
+//! - **Sprite pipeline**: For RGBA sprite rendering
+//!
+//! Draw calls are batched by texture to minimize bind group switches. Each frame:
+//! 1. Call drawing methods ([`Draw2d::rect`], [`Draw2d::text`], [`Draw2d::sprite`], etc.)
+//! 2. Call [`Draw2d::render`] to flush all batched geometry to the GPU
+//! 3. Call [`Draw2d::clear`] to reset batches for the next frame
+//!
+//! # Coordinate System
+//!
+//! All coordinates are in screen-space pixels with the origin at the top-left corner.
+//! X increases rightward, Y increases downward.
+//!
+//! # Example
+//!
+//! ```ignore
+//! // During frame update
+//! draw2d.rect(10.0, 10.0, 100.0, 50.0, Color::rgb(0.2, 0.4, 0.8));
+//! draw2d.text(&assets, font_id, 20.0, 20.0, "Hello!", Color::WHITE);
+//! draw2d.sprite(sprite_id, 150.0, 10.0, Color::WHITE);
+//!
+//! // During render pass
+//! draw2d.render(&gpu, &mut render_pass, &assets);
+//! draw2d.clear();
+//! ```
+
 use crate::assets::{Assets, FontId};
 use crate::gpu::GpuContext;
 use crate::texture::Sprite;
 
 /// Index into the sprite storage.
+///
+/// Obtained from [`Draw2d::add_sprite`] and used to reference sprites in draw calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SpriteId(pub usize);
 
 /// A rectangle in screen-space pixel coordinates.
+///
+/// The origin is at the top-left corner, with X increasing rightward
+/// and Y increasing downward.
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
+    /// X coordinate of the top-left corner.
     pub x: f32,
+    /// Y coordinate of the top-left corner.
     pub y: f32,
+    /// Width of the rectangle in pixels.
     pub width: f32,
+    /// Height of the rectangle in pixels.
     pub height: f32,
 }
 
 impl Rect {
+    /// Creates a new rectangle with the given position and dimensions.
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             x,
@@ -26,44 +72,83 @@ impl Rect {
     }
 }
 
-/// RGBA color with premultiplied alpha.
+/// RGBA color with components in the range `[0.0, 1.0]`.
+///
+/// Colors are used for tinting sprites, coloring rectangles, and styling text.
+/// The alpha component controls transparency (0.0 = fully transparent, 1.0 = fully opaque).
+///
+/// # Predefined Colors
+///
+/// Several commonly-used colors are provided as constants:
+/// - [`Color::WHITE`], [`Color::BLACK`], [`Color::TRANSPARENT`]
+/// - [`Color::DEBUG_BG`], [`Color::DEBUG_BORDER`] for debug UI styling
 #[derive(Clone, Copy, Debug)]
 pub struct Color {
+    /// Red component (0.0 to 1.0).
     pub r: f32,
+    /// Green component (0.0 to 1.0).
     pub g: f32,
+    /// Blue component (0.0 to 1.0).
     pub b: f32,
+    /// Alpha component (0.0 = transparent, 1.0 = opaque).
     pub a: f32,
 }
 
 impl Color {
+    /// Creates a color from RGBA components.
+    ///
+    /// All components should be in the range `[0.0, 1.0]`.
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
+    /// Creates an opaque color from RGB components.
+    ///
+    /// Equivalent to `Color::rgba(r, g, b, 1.0)`.
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
+    /// Fully opaque white.
     pub const WHITE: Color = Color::rgba(1.0, 1.0, 1.0, 1.0);
+    /// Fully opaque black.
     pub const BLACK: Color = Color::rgba(0.0, 0.0, 0.0, 1.0);
+    /// Fully transparent (invisible).
     pub const TRANSPARENT: Color = Color::rgba(0.0, 0.0, 0.0, 0.0);
 
     /// Semi-transparent dark background for debug panels.
     pub const DEBUG_BG: Color = Color::rgba(0.1, 0.1, 0.1, 0.85);
-    /// Accent color for borders.
+    /// Gray accent color for panel borders.
     pub const DEBUG_BORDER: Color = Color::rgba(0.4, 0.4, 0.4, 1.0);
 }
 
-/// Vertex for 2D sprite/text rendering.
+/// Vertex format for 2D sprite and text rendering.
+///
+/// Each vertex contains:
+/// - **Position**: Screen-space coordinates in pixels
+/// - **UV**: Texture coordinates (0.0 to 1.0)
+/// - **Color**: RGBA tint color
+///
+/// This struct is `#[repr(C)]` and implements [`bytemuck::Pod`] for direct
+/// GPU buffer uploads.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex2d {
+    /// Screen-space position in pixels `[x, y]`.
     pub position: [f32; 2],
+    /// Texture coordinates `[u, v]` in range `[0.0, 1.0]`.
     pub uv: [f32; 2],
+    /// RGBA color for tinting `[r, g, b, a]`.
     pub color: [f32; 4],
 }
 
 impl Vertex2d {
+    /// Vertex buffer layout descriptor for wgpu pipeline creation.
+    ///
+    /// Defines the memory layout:
+    /// - Location 0: `position` as `Float32x2` (offset 0)
+    /// - Location 1: `uv` as `Float32x2` (offset 8)
+    /// - Location 2: `color` as `Float32x4` (offset 16)
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<Vertex2d>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
@@ -90,45 +175,102 @@ impl Vertex2d {
     };
 }
 
-/// Uniforms for 2D rendering.
+/// Uniform buffer data for 2D rendering.
+///
+/// Contains the screen resolution for converting pixel coordinates to
+/// normalized device coordinates in the vertex shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Draw2dUniforms {
+    /// Screen resolution `[width, height]` in pixels.
     resolution: [f32; 2],
+    /// Padding to align to 16 bytes (required by wgpu uniform buffers).
     _padding: [f32; 2],
 }
 
+/// Maximum number of vertices that can be batched per frame.
+///
+/// With 6 vertices per quad, this allows approximately 2,730 quads per frame.
 const MAX_VERTICES: usize = 16384;
 
-/// Immediate-mode 2D drawing API for sprites and text.
+/// Immediate-mode 2D drawing API for sprites, text, and shapes.
 ///
-/// All draw calls are batched and rendered in a single pass at the end of the frame.
+/// `Draw2d` provides a simple interface for rendering 2D graphics on top of
+/// your 3D scene or as a standalone 2D application. All draw calls are batched
+/// and rendered efficiently in a single pass.
+///
+/// # Usage Pattern
+///
+/// ```ignore
+/// // 1. Issue draw calls during your update/draw phase
+/// draw2d.rect(x, y, width, height, Color::WHITE);
+/// draw2d.text(&assets, font_id, x, y, "Hello", Color::BLACK);
+/// draw2d.sprite(sprite_id, x, y, Color::WHITE);
+///
+/// // 2. Render everything in your render pass
+/// draw2d.render(&gpu, &mut render_pass, &assets);
+///
+/// // 3. Clear batches for the next frame
+/// draw2d.clear();
+/// ```
+///
+/// # Batching Strategy
+///
+/// Draw calls are grouped by their texture requirements:
+/// - Colored rectangles are batched together (no texture)
+/// - Text is batched per-font (each font has its own atlas texture)
+/// - Sprites are batched per-sprite (each sprite is a separate texture)
+///
+/// This minimizes GPU state changes while maintaining draw order within each batch type.
+/// Note that colored geometry is always drawn first, followed by text, then sprites.
 pub struct Draw2d {
-    // Pipelines
+    // Pipelines for different rendering modes
+    /// Pipeline for solid-color rectangles (no texture sampling).
     colored_pipeline: wgpu::RenderPipeline,
+    /// Pipeline for font rendering (R8 alpha mask textures).
     textured_pipeline: wgpu::RenderPipeline,
+    /// Pipeline for RGBA sprite rendering.
     sprite_pipeline: wgpu::RenderPipeline,
 
-    // Shared resources
+    // Shared GPU resources
+    /// Dynamic vertex buffer for all 2D geometry.
     vertex_buffer: wgpu::Buffer,
+    /// Uniform buffer containing screen resolution.
     uniform_buffer: wgpu::Buffer,
+    /// Bind group for uniforms (group 0).
     uniform_bind_group: wgpu::BindGroup,
+    /// Layout for texture bind groups (group 1).
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Per-font bind groups (cached)
+    // Per-font bind groups (cached, indexed by FontId)
     font_bind_groups: Vec<Option<wgpu::BindGroup>>,
 
     // Sprite storage and bind groups
+    /// All registered sprites.
     pub(crate) sprites: Vec<Sprite>,
+    /// Cached bind groups for sprites (indexed by SpriteId).
     sprite_bind_groups: Vec<Option<wgpu::BindGroup>>,
 
-    // Current frame batches
+    // Current frame vertex batches
+    /// Vertices for solid-color rectangles.
     colored_vertices: Vec<Vertex2d>,
+    /// Vertices for text, grouped by font.
     text_batches: Vec<(FontId, Vec<Vertex2d>)>,
+    /// Vertices for sprites, grouped by sprite texture.
     sprite_batches: Vec<(SpriteId, Vec<Vertex2d>)>,
 }
 
 impl Draw2d {
+    /// Creates a new 2D drawing context.
+    ///
+    /// Initializes all GPU resources including:
+    /// - Render pipelines for colored, textured, and sprite rendering
+    /// - Vertex and uniform buffers
+    /// - Bind group layouts
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context containing the device and surface configuration
     pub fn new(gpu: &GpuContext) -> Self {
         let device = &gpu.device;
 
@@ -339,7 +481,17 @@ impl Draw2d {
         }
     }
 
-    /// Add a sprite and return its ID.
+    /// Registers a sprite texture and returns its ID for later use.
+    ///
+    /// The sprite's GPU bind group will be created lazily on first render.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite` - The sprite texture to register
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] that can be used with [`Draw2d::sprite`] and related methods.
     pub fn add_sprite(&mut self, sprite: Sprite) -> SpriteId {
         let id = SpriteId(self.sprites.len());
         self.sprites.push(sprite);
@@ -347,19 +499,28 @@ impl Draw2d {
         id
     }
 
-    /// Get a sprite by ID.
+    /// Returns a reference to the sprite with the given ID, if it exists.
     pub fn get_sprite(&self, id: SpriteId) -> Option<&Sprite> {
         self.sprites.get(id.0)
     }
 
-    /// Clear all draw calls for the new frame.
+    /// Clears all batched draw calls for the new frame.
+    ///
+    /// Call this at the end of each frame after [`Draw2d::render`] to prepare
+    /// for the next frame's draw calls.
     pub fn clear(&mut self) {
         self.colored_vertices.clear();
         self.text_batches.clear();
         self.sprite_batches.clear();
     }
 
-    /// Draw a colored rectangle.
+    /// Draws a solid-color rectangle.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y` - Top-left corner position in pixels
+    /// * `w`, `h` - Width and height in pixels
+    /// * `color` - Fill color
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         let c = [color.r, color.g, color.b, color.a];
         let uv = [0.0, 0.0]; // Not used for colored quads
@@ -398,7 +559,23 @@ impl Draw2d {
         ]);
     }
 
-    /// Draw text at the given position.
+    /// Draws text at the given position.
+    ///
+    /// Text is rendered using the specified font from the asset system.
+    /// The position specifies the top-left corner of the text bounding box.
+    ///
+    /// # Arguments
+    ///
+    /// * `assets` - Asset manager containing loaded fonts
+    /// * `font_id` - ID of the font to use (from [`Assets::load_font`])
+    /// * `x`, `y` - Top-left corner position in pixels
+    /// * `text` - The string to render
+    /// * `color` - Text color
+    ///
+    /// # Notes
+    ///
+    /// - Missing glyphs are skipped with a fallback advance
+    /// - Each font is batched separately for efficient rendering
     pub fn text(
         &mut self,
         assets: &Assets,
@@ -485,9 +662,16 @@ impl Draw2d {
         }
     }
 
-    /// Draw a sprite at the given position.
+    /// Draws a sprite at its native size.
     ///
-    /// The sprite is drawn at its native size. Use `sprite_scaled` for custom sizing.
+    /// The sprite is drawn at its original pixel dimensions. Use [`Draw2d::sprite_scaled`]
+    /// for custom sizing or [`Draw2d::sprite_region`] for sprite sheet sub-regions.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID of the sprite (from [`Draw2d::add_sprite`])
+    /// * `x`, `y` - Top-left corner position in pixels
+    /// * `tint` - Color multiplier (use [`Color::WHITE`] for no tinting)
     pub fn sprite(&mut self, sprite_id: SpriteId, x: f32, y: f32, tint: Color) {
         let Some(sprite) = self.sprites.get(sprite_id.0) else {
             return;
@@ -497,7 +681,16 @@ impl Draw2d {
         self.sprite_rect(sprite_id, x, y, w, h, tint);
     }
 
-    /// Draw a sprite scaled to fit a rectangle.
+    /// Draws a sprite scaled to fit a rectangle.
+    ///
+    /// The sprite texture is stretched to fill the specified dimensions.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID of the sprite (from [`Draw2d::add_sprite`])
+    /// * `x`, `y` - Top-left corner position in pixels
+    /// * `w`, `h` - Destination width and height in pixels
+    /// * `tint` - Color multiplier (use [`Color::WHITE`] for no tinting)
     pub fn sprite_scaled(
         &mut self,
         sprite_id: SpriteId,
@@ -510,9 +703,19 @@ impl Draw2d {
         self.sprite_rect(sprite_id, x, y, w, h, tint);
     }
 
-    /// Draw a sprite with a sub-region (for sprite sheets).
+    /// Draws a sub-region of a sprite (for sprite sheets).
     ///
-    /// `src_rect` defines the source rectangle in pixel coordinates within the sprite.
+    /// This is useful for sprite sheets where multiple frames or tiles are
+    /// packed into a single texture.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID of the sprite (from [`Draw2d::add_sprite`])
+    /// * `x`, `y` - Destination top-left corner in pixels
+    /// * `w`, `h` - Destination width and height in pixels
+    /// * `src_x`, `src_y` - Source region top-left corner in pixels (within the sprite)
+    /// * `src_w`, `src_h` - Source region dimensions in pixels
+    /// * `tint` - Color multiplier (use [`Color::WHITE`] for no tinting)
     pub fn sprite_region(
         &mut self,
         sprite_id: SpriteId,
@@ -585,7 +788,9 @@ impl Draw2d {
         ]);
     }
 
-    /// Internal: draw a sprite filling a rectangle with full UV range.
+    /// Draws a sprite filling a rectangle with full UV range (0,0 to 1,1).
+    ///
+    /// Internal helper used by [`Draw2d::sprite`] and [`Draw2d::sprite_scaled`].
     fn sprite_rect(&mut self, sprite_id: SpriteId, x: f32, y: f32, w: f32, h: f32, tint: Color) {
         let c = [tint.r, tint.g, tint.b, tint.a];
 
@@ -633,10 +838,26 @@ impl Draw2d {
         ]);
     }
 
-    /// Draw a bordered panel with optional title bar.
+    /// Creates a panel builder for drawing bordered UI panels.
     ///
-    /// This is a convenience method for drawing debug overlays and UI panels.
-    /// For more control, use the individual `rect()` and `text()` methods.
+    /// Returns a [`PanelBuilder`] that allows customizing the panel's appearance
+    /// before drawing. This is a convenience method for creating debug overlays
+    /// and simple UI elements.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y` - Top-left corner position in pixels
+    /// * `width`, `height` - Panel dimensions in pixels
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// draw2d.panel(10.0, 10.0, 200.0, 100.0)
+    ///     .background(Color::DEBUG_BG)
+    ///     .border(Color::DEBUG_BORDER)
+    ///     .title("Debug Panel", font_id)
+    ///     .draw(&assets);
+    /// ```
     pub fn panel(&mut self, x: f32, y: f32, width: f32, height: f32) -> PanelBuilder<'_> {
         PanelBuilder {
             draw2d: self,
@@ -651,7 +872,16 @@ impl Draw2d {
         }
     }
 
-    /// Ensure we have bind groups for all loaded fonts and sprites.
+    /// Creates GPU bind groups for newly loaded fonts and sprites.
+    ///
+    /// This method lazily creates bind groups for any fonts or sprites that
+    /// don't yet have them. Call this once per frame before rendering to ensure
+    /// all textures are ready for use.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context
+    /// * `assets` - Asset manager containing loaded fonts
     pub(crate) fn update_font_bind_groups(&mut self, gpu: &GpuContext, assets: &Assets) {
         // Grow the bind group cache if needed
         while self.font_bind_groups.len() < assets.fonts.len() {
@@ -710,7 +940,20 @@ impl Draw2d {
         }
     }
 
-    /// Render all batched draw calls.
+    /// Renders all batched draw calls to the given render pass.
+    ///
+    /// This method flushes all accumulated geometry from the current frame:
+    /// 1. Colored rectangles (using the colored pipeline)
+    /// 2. Text batches (using the textured pipeline, one draw per font)
+    /// 3. Sprite batches (using the sprite pipeline, one draw per sprite texture)
+    ///
+    /// Call [`Draw2d::clear`] after this to prepare for the next frame.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context for buffer uploads
+    /// * `render_pass` - The active render pass to draw into
+    /// * `_assets` - Asset manager (currently unused but kept for API consistency)
     pub fn render(&self, gpu: &GpuContext, render_pass: &mut wgpu::RenderPass, _assets: &Assets) {
         // Update uniforms
         let uniforms = Draw2dUniforms {
@@ -795,46 +1038,97 @@ impl Draw2d {
     }
 }
 
-/// Builder for drawing panels with backgrounds, borders, and titles.
+/// Builder for drawing panels with backgrounds, borders, and optional titles.
+///
+/// Created via [`Draw2d::panel`]. Use the builder methods to customize the
+/// panel's appearance, then call [`PanelBuilder::draw`] to render it.
+///
+/// # Default Appearance
+///
+/// - Background: [`Color::DEBUG_BG`] (semi-transparent dark)
+/// - Border: [`Color::DEBUG_BORDER`] (gray, 1px)
+/// - No title bar
+///
+/// # Example
+///
+/// ```ignore
+/// draw2d.panel(10.0, 10.0, 200.0, 150.0)
+///     .background(Color::rgba(0.0, 0.0, 0.2, 0.9))
+///     .border(Color::WHITE)
+///     .title("Settings", font_id)
+///     .draw(&assets);
+/// ```
 pub struct PanelBuilder<'a> {
+    /// Reference to the Draw2d instance for issuing draw calls.
     draw2d: &'a mut Draw2d,
+    /// X coordinate of the panel's top-left corner.
     x: f32,
+    /// Y coordinate of the panel's top-left corner.
     y: f32,
+    /// Width of the panel in pixels.
     width: f32,
+    /// Height of the panel in pixels.
     height: f32,
+    /// Background fill color.
     background: Color,
+    /// Border color, or `None` for no border.
     border: Option<Color>,
+    /// Optional title text.
     title: Option<String>,
+    /// Font for the title (required if `title` is set).
     title_font: Option<FontId>,
 }
 
 impl<'a> PanelBuilder<'a> {
-    /// Set the background color.
+    /// Sets the background fill color.
+    ///
+    /// Default: [`Color::DEBUG_BG`]
     pub fn background(mut self, color: Color) -> Self {
         self.background = color;
         self
     }
 
-    /// Set the border color.
+    /// Sets the border color.
+    ///
+    /// The border is drawn as a 1-pixel outline around the panel.
+    ///
+    /// Default: [`Color::DEBUG_BORDER`]
     pub fn border(mut self, color: Color) -> Self {
         self.border = Some(color);
         self
     }
 
-    /// Remove the border.
+    /// Removes the border from the panel.
     pub fn no_border(mut self) -> Self {
         self.border = None;
         self
     }
 
-    /// Add a title bar with the given text and font.
+    /// Adds a title bar with the given text and font.
+    ///
+    /// The title bar is rendered as a darker strip at the top of the panel
+    /// with the text left-aligned and white-colored.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The title text to display
+    /// * `font` - Font ID to use for rendering the title
     pub fn title(mut self, text: impl Into<String>, font: FontId) -> Self {
         self.title = Some(text.into());
         self.title_font = Some(font);
         self
     }
 
-    /// Draw the panel. Call this to finalize and render the panel.
+    /// Finalizes and draws the panel.
+    ///
+    /// This consumes the builder and issues draw calls for:
+    /// 1. The background rectangle
+    /// 2. The border (if enabled)
+    /// 3. The title bar (if set)
+    ///
+    /// # Arguments
+    ///
+    /// * `assets` - Asset manager for font rendering (required if title is set)
     pub fn draw(self, assets: &Assets) {
         let border_width = 1.0;
         let title_height = 22.0;
