@@ -6,6 +6,8 @@ mod effect_pass;
 mod gpu;
 mod hot_shader;
 mod input;
+mod mesh;
+mod mesh_pass;
 mod orbit_camera;
 mod post_process;
 mod render_graph;
@@ -18,11 +20,14 @@ pub use effect_pass::EffectPass;
 pub use gpu::GpuContext;
 pub use hot_shader::{HotEffectPass, HotPostProcessPass, HotShader, HotWorldPostProcessPass};
 pub use input::Input;
+pub use mesh::{Mesh, Transform, Vertex3d};
+pub use mesh_pass::MeshPass;
 pub use orbit_camera::{OrbitCamera, OrbitMode};
 pub use post_process::{PostProcessPass, WorldPostProcessPass};
 pub use render_graph::{
-    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, PostProcessNode,
-    RenderContext, RenderGraph, RenderGraphBuilder, RenderNode, RenderTarget, WorldPostProcessNode,
+    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, MeshNode, MeshQueue,
+    PostProcessNode, RenderContext, RenderGraph, RenderGraphBuilder, RenderNode, RenderTarget,
+    WorldPostProcessNode,
 };
 
 // Re-export glam math types for convenience

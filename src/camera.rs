@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 /// A simple camera for 3D scenes.
 ///
@@ -10,6 +10,8 @@ pub struct Camera {
     pub forward: Vec3,
     pub up: Vec3,
     pub fov: f32, // radians
+    pub near: f32,
+    pub far: f32,
 }
 
 impl Default for Camera {
@@ -19,6 +21,8 @@ impl Default for Camera {
             forward: Vec3::NEG_Z,
             up: Vec3::Y,
             fov: std::f32::consts::FRAC_PI_2, // 90 degrees
+            near: 0.1,
+            far: 1000.0,
         }
     }
 }
@@ -52,5 +56,15 @@ impl Camera {
     /// Recompute up to be orthogonal to forward and right.
     pub fn orthogonal_up(&self) -> Vec3 {
         self.right().cross(self.forward).normalize_or_zero()
+    }
+
+    /// Compute the view matrix for this camera.
+    pub fn view_matrix(&self) -> Mat4 {
+        Mat4::look_at_rh(self.position, self.position + self.forward, self.up)
+    }
+
+    /// Compute the projection matrix for this camera.
+    pub fn projection_matrix(&self, aspect: f32, near: f32, far: f32) -> Mat4 {
+        Mat4::perspective_rh(self.fov, aspect, near, far)
     }
 }

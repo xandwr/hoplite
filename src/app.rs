@@ -12,11 +12,14 @@ use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
 use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
 use crate::input::Input;
+use crate::mesh::{Mesh, Transform};
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
 use crate::render_graph::{
-    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, PostProcessNode,
-    RenderGraph, WorldPostProcessNode,
+    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, MeshNode, MeshQueue,
+    PostProcessNode, RenderGraph, WorldPostProcessNode,
 };
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Context provided during app setup.
 pub struct SetupContext<'a> {
@@ -24,6 +27,7 @@ pub struct SetupContext<'a> {
     pub assets: &'a mut Assets,
     default_font: &'a mut Option<FontId>,
     graph_builder: &'a mut Option<RenderGraph>,
+    mesh_queue: &'a Rc<RefCell<MeshQueue>>,
 }
 
 impl<'a> SetupContext<'a> {
@@ -129,6 +133,45 @@ impl<'a> SetupContext<'a> {
             *self.graph_builder = Some(old.with_node(node, self.gpu));
         }
     }
+
+    // ========================================================================
+    // Mesh methods
+    // ========================================================================
+
+    /// Enable 3D mesh rendering in the pipeline.
+    ///
+    /// This adds a mesh rendering pass to the render graph. Call this before
+    /// adding post-processing effects if you want meshes to be affected by them.
+    ///
+    /// Returns self for chaining.
+    pub fn enable_mesh_rendering(&mut self) -> &mut Self {
+        let mesh_node = MeshNode::new(self.gpu, Rc::clone(self.mesh_queue));
+        self.add_node(mesh_node);
+        self
+    }
+
+    /// Create a unit cube mesh and return its index.
+    pub fn mesh_cube(&mut self) -> usize {
+        let mesh = Mesh::cube(self.gpu);
+        self.mesh_queue.borrow_mut().add_mesh(mesh)
+    }
+
+    /// Create a sphere mesh and return its index.
+    pub fn mesh_sphere(&mut self, segments: u32, rings: u32) -> usize {
+        let mesh = Mesh::sphere(self.gpu, segments, rings);
+        self.mesh_queue.borrow_mut().add_mesh(mesh)
+    }
+
+    /// Create a flat plane mesh and return its index.
+    pub fn mesh_plane(&mut self, size: f32) -> usize {
+        let mesh = Mesh::plane(self.gpu, size);
+        self.mesh_queue.borrow_mut().add_mesh(mesh)
+    }
+
+    /// Add a custom mesh and return its index.
+    pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
+        self.mesh_queue.borrow_mut().add_mesh(mesh)
+    }
 }
 
 /// Context provided each frame for rendering.
@@ -152,6 +195,8 @@ pub struct Frame<'a> {
     pub dt: f32,
     /// Default font (if set during setup).
     default_font: Option<FontId>,
+    /// Mesh queue for 3D rendering.
+    mesh_queue: Rc<RefCell<MeshQueue>>,
 }
 
 impl Frame<'_> {
@@ -210,6 +255,20 @@ impl Frame<'_> {
             .title(title, font)
             .draw(self.assets);
         y + 22.0 // Title bar height
+    }
+
+    /// Draw a 3D mesh at the given transform with the specified color.
+    ///
+    /// Requires `ctx.enable_mesh_rendering()` to be called during setup.
+    pub fn draw_mesh(&mut self, mesh_index: usize, transform: Transform, color: Color) {
+        self.mesh_queue
+            .borrow_mut()
+            .draw(mesh_index, transform, color);
+    }
+
+    /// Draw a 3D mesh with default white color.
+    pub fn draw_mesh_white(&mut self, mesh_index: usize, transform: Transform) {
+        self.draw_mesh(mesh_index, transform, Color::WHITE);
     }
 }
 
@@ -295,7 +354,7 @@ where
 
     let mut app = HopliteApp::Pending {
         config,
-        setup: Some(Box::new(move |gpu, assets| {
+        setup: Some(Box::new(move |gpu, assets, mesh_queue| {
             let mut default_font = None;
             let mut graph_builder = None;
 
@@ -304,6 +363,7 @@ where
                 assets,
                 default_font: &mut default_font,
                 graph_builder: &mut graph_builder,
+                mesh_queue,
             };
 
             let frame_fn = setup(&mut ctx);
@@ -323,6 +383,7 @@ type SetupFn = Box<
     dyn FnOnce(
         &GpuContext,
         &mut Assets,
+        &Rc<RefCell<MeshQueue>>,
     ) -> (
         Box<dyn FnMut(&mut Frame)>,
         Option<FontId>,
@@ -345,6 +406,7 @@ enum HopliteApp {
         frame_fn: Box<dyn FnMut(&mut Frame)>,
         default_font: Option<FontId>,
         render_graph: Option<RenderGraph>,
+        mesh_queue: Rc<RefCell<MeshQueue>>,
         start_time: Instant,
         last_frame: Instant,
     },
@@ -362,8 +424,11 @@ impl ApplicationHandler for HopliteApp {
             let mut assets = Assets::new(&gpu);
             let draw_2d = Draw2d::new(&gpu);
 
+            // Create shared mesh queue
+            let mesh_queue = Rc::new(RefCell::new(MeshQueue::new()));
+
             let setup_fn = setup.take().unwrap();
-            let (frame_fn, default_font, render_graph) = setup_fn(&gpu, &mut assets);
+            let (frame_fn, default_font, render_graph) = setup_fn(&gpu, &mut assets, &mesh_queue);
 
             *self = HopliteApp::Running {
                 window,
@@ -375,6 +440,7 @@ impl ApplicationHandler for HopliteApp {
                 frame_fn,
                 default_font,
                 render_graph,
+                mesh_queue,
                 start_time: Instant::now(),
                 last_frame: Instant::now(),
             };
@@ -392,6 +458,7 @@ impl ApplicationHandler for HopliteApp {
             frame_fn,
             default_font,
             render_graph,
+            mesh_queue,
             start_time,
             last_frame,
         } = self
@@ -418,6 +485,9 @@ impl ApplicationHandler for HopliteApp {
                 draw_2d.clear();
                 draw_2d.update_font_bind_groups(gpu, assets);
 
+                // Clear mesh queue for new frame
+                mesh_queue.borrow_mut().clear_queue();
+
                 // Create frame context
                 let mut frame = Frame {
                     gpu,
@@ -428,6 +498,7 @@ impl ApplicationHandler for HopliteApp {
                     time,
                     dt,
                     default_font: *default_font,
+                    mesh_queue: Rc::clone(mesh_queue),
                 };
 
                 // Run user's frame function

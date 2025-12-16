@@ -186,6 +186,8 @@ impl OrbitCamera {
             forward: (self.target - position).normalize_or(Vec3::NEG_Z),
             up: Vec3::Y,
             fov: self.fov,
+            near: 0.1,
+            far: 1000.0,
         }
     }
 }

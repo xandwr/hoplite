@@ -1,8 +1,13 @@
 use crate::camera::Camera;
+use crate::draw2d::Color;
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
 use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
+use crate::mesh::{Mesh, Transform};
+use crate::mesh_pass::{DrawCall, MeshPass};
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// A render target that can be written to by passes.
 pub struct RenderTarget {
@@ -387,6 +392,192 @@ impl RenderNode for HotWorldPostProcessNode {
 
     fn check_hot_reload(&mut self, gpu: &GpuContext) {
         self.pass.check_reload(gpu);
+    }
+}
+
+// ============================================================================
+// Mesh Render Node
+// ============================================================================
+
+/// A queued mesh draw call stored in the shared queue.
+pub struct QueuedMesh {
+    pub mesh_index: usize,
+    pub transform: Transform,
+    pub color: Color,
+}
+
+/// Shared storage for meshes and draw queue, accessible from Frame.
+pub struct MeshQueue {
+    pub meshes: Vec<Mesh>,
+    pub draw_queue: Vec<QueuedMesh>,
+}
+
+impl MeshQueue {
+    pub fn new() -> Self {
+        Self {
+            meshes: Vec::new(),
+            draw_queue: Vec::new(),
+        }
+    }
+
+    /// Add a mesh and return its index.
+    pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
+        let idx = self.meshes.len();
+        self.meshes.push(mesh);
+        idx
+    }
+
+    /// Queue a mesh for drawing this frame.
+    pub fn draw(&mut self, mesh_index: usize, transform: Transform, color: Color) {
+        self.draw_queue.push(QueuedMesh {
+            mesh_index,
+            transform,
+            color,
+        });
+    }
+
+    /// Clear the draw queue for the next frame.
+    pub fn clear_queue(&mut self) {
+        self.draw_queue.clear();
+    }
+}
+
+impl Default for MeshQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A render node that draws 3D meshes with depth testing.
+pub struct MeshNode {
+    pub pass: MeshPass,
+    pub queue: Rc<RefCell<MeshQueue>>,
+    pub clear_color: Option<wgpu::Color>,
+}
+
+impl MeshNode {
+    pub fn new(gpu: &GpuContext, queue: Rc<RefCell<MeshQueue>>) -> Self {
+        Self {
+            pass: MeshPass::new(gpu),
+            queue,
+            clear_color: None, // Don't clear by default - render on top of previous pass
+        }
+    }
+
+    pub fn with_clear(mut self, color: wgpu::Color) -> Self {
+        self.clear_color = Some(color);
+        self
+    }
+}
+
+impl RenderNode for MeshNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    ) {
+        let queue = self.queue.borrow();
+
+        // Build draw calls from the queue
+        let draw_calls: Vec<DrawCall> = queue
+            .draw_queue
+            .iter()
+            .filter_map(|q| {
+                queue.meshes.get(q.mesh_index).map(|mesh| DrawCall {
+                    mesh,
+                    transform: q.transform,
+                    color: q.color,
+                })
+            })
+            .collect();
+
+        // If there's an input texture, we need to blit it first as the background
+        if let Some(input_view) = input {
+            // First pass: blit the input texture to the target (no depth)
+            let mut blit_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Mesh Blit Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.pass.blit(ctx.gpu, &mut blit_pass, input_view);
+        }
+
+        // If no meshes to draw, we're done (background is already blitted)
+        if draw_calls.is_empty() {
+            // If there was no input either, we need to at least clear the target
+            if input.is_none() {
+                let _clear_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Mesh Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(
+                                self.clear_color.unwrap_or(wgpu::Color::BLACK),
+                            ),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            return;
+        }
+
+        // Second pass: render meshes on top with depth testing
+        // Use Load since we already blitted (or Clear if no input and clear_color is set)
+        let load_op = if input.is_some() {
+            wgpu::LoadOp::Load
+        } else {
+            match self.clear_color {
+                Some(color) => wgpu::LoadOp::Clear(color),
+                None => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            }
+        };
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Mesh Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.pass.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.pass
+            .render(ctx.gpu, &mut render_pass, ctx.camera, ctx.time, &draw_calls);
+    }
+
+    fn check_hot_reload(&mut self, gpu: &GpuContext) {
+        self.pass.ensure_depth_size(gpu);
     }
 }
 
