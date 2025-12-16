@@ -24,3 +24,7 @@ winit = "0.30.12"
 [[example]]
 name = "black_hole"
 path = "examples/black_hole.rs"
+
+[[example]]
+name = "sphere"
+path = "examples/sphere.rs"

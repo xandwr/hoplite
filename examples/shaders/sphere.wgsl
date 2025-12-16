@@ -1,4 +1,4 @@
-// World-space raymarched sphere - demonstrates camera uniforms
+// Raymarched sphere - demonstrates world-space camera uniforms
 
 struct Uniforms {
     resolution: vec2f,
@@ -23,17 +23,15 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     return vec4f(x, y, 0.0, 1.0);
 }
 
-// Signed distance function for a sphere
 fn sd_sphere(p: vec3f, center: vec3f, radius: f32) -> f32 {
     return length(p - center) - radius;
 }
 
-// Simple raymarching
 fn raymarch(ro: vec3f, rd: vec3f) -> f32 {
     var t = 0.0;
     for (var i = 0; i < 64; i++) {
         let p = ro + rd * t;
-        let d = sd_sphere(p, vec3f(0.0, 0.0, 0.0), 1.0);
+        let d = sd_sphere(p, vec3f(0.0), 1.0);
         if (d < 0.001) {
             return t;
         }
@@ -45,7 +43,6 @@ fn raymarch(ro: vec3f, rd: vec3f) -> f32 {
     return -1.0;
 }
 
-// Compute normal via gradient
 fn calc_normal(p: vec3f) -> vec3f {
     let e = vec2f(0.001, 0.0);
     return normalize(vec3f(
@@ -57,10 +54,8 @@ fn calc_normal(p: vec3f) -> vec3f {
 
 @fragment
 fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-    // Convert pixel to normalized device coordinates (-1 to 1)
     let uv = (pos.xy / u.resolution) * 2.0 - 1.0;
 
-    // Construct ray direction from camera
     let half_fov = u.fov * 0.5;
     let rd = normalize(
         u.camera_forward
@@ -69,15 +64,12 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     );
 
     let ro = u.camera_pos;
-
-    // Raymarch
     let t = raymarch(ro, rd);
 
     if (t > 0.0) {
         let p = ro + rd * t;
         let n = calc_normal(p);
 
-        // Simple directional lighting
         let light_dir = normalize(vec3f(1.0, 1.0, 1.0));
         let diffuse = max(dot(n, light_dir), 0.0);
         let ambient = 0.1;
@@ -86,7 +78,6 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
         return vec4f(color, 1.0);
     }
 
-    // Background gradient
     let bg = mix(vec3f(0.1, 0.1, 0.15), vec3f(0.02, 0.02, 0.05), uv.y * 0.5 + 0.5);
     return vec4f(bg, 1.0);
 }
