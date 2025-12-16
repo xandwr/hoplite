@@ -149,7 +149,7 @@ Edit any `.wgsl` file passed to `hot_effect*` or `hot_post_process*` methods. Ho
 
 ```toml
 [dependencies]
-hoplite = { git = "https://github.com/yourname/hoplite" }
+hoplite = { git = "https://github.com/xandwr/hoplite" }
 ```
 
 ```rust
