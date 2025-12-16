@@ -4,6 +4,7 @@ mod camera;
 mod draw2d;
 mod effect_pass;
 mod gpu;
+mod hot_shader;
 mod input;
 mod orbit_camera;
 mod post_process;
@@ -15,12 +16,13 @@ pub use camera::Camera;
 pub use draw2d::{Color, Draw2d, PanelBuilder, Rect};
 pub use effect_pass::EffectPass;
 pub use gpu::GpuContext;
+pub use hot_shader::{HotEffectPass, HotPostProcessPass, HotShader, HotWorldPostProcessPass};
 pub use input::Input;
 pub use orbit_camera::{OrbitCamera, OrbitMode};
 pub use post_process::{PostProcessPass, WorldPostProcessPass};
 pub use render_graph::{
-    EffectNode, PostProcessNode, RenderContext, RenderGraph, RenderGraphBuilder, RenderNode,
-    RenderTarget, WorldPostProcessNode,
+    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, PostProcessNode,
+    RenderContext, RenderGraph, RenderGraphBuilder, RenderNode, RenderTarget, WorldPostProcessNode,
 };
 
 // Re-export glam math types for convenience

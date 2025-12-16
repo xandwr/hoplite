@@ -4,8 +4,10 @@ fn main() {
     run_with_config(AppConfig::new().title("Black Hole"), |ctx| {
         // Setup: configure render pipeline and load assets
         ctx.default_font(16.0);
-        ctx.effect_world(include_str!("shaders/black_hole.wgsl"))
-            .post_process_world(include_str!("shaders/gravitational_lensing.wgsl"));
+
+        // Hot-reloadable shaders - edit the files and see changes live!
+        ctx.hot_effect_world("examples/shaders/black_hole.wgsl")
+            .hot_post_process_world("examples/shaders/gravitational_lensing.wgsl");
 
         // Camera: auto-rotate or interactive orbit
         let mut orbit = OrbitCamera::new()

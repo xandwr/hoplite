@@ -1,6 +1,7 @@
 use crate::camera::Camera;
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
+use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
 
 /// A render target that can be written to by passes.
@@ -62,6 +63,10 @@ pub trait RenderNode {
         target: &wgpu::TextureView,
         input: Option<&wgpu::TextureView>,
     );
+
+    /// Check for hot-reload changes. Called once per frame before execute.
+    /// Default implementation does nothing (for non-hot-reloadable nodes).
+    fn check_hot_reload(&mut self, _gpu: &GpuContext) {}
 }
 
 /// An effect pass wrapped as a render node.
@@ -209,6 +214,182 @@ impl RenderNode for WorldPostProcessNode {
     }
 }
 
+// ============================================================================
+// Hot-Reload Render Nodes
+// ============================================================================
+
+/// A hot-reloadable effect pass wrapped as a render node.
+pub struct HotEffectNode {
+    pub effect: HotEffectPass,
+    pub clear_color: Option<wgpu::Color>,
+}
+
+impl HotEffectNode {
+    pub fn new(effect: HotEffectPass) -> Self {
+        Self {
+            effect,
+            clear_color: Some(wgpu::Color::BLACK),
+        }
+    }
+
+    pub fn with_clear(mut self, color: wgpu::Color) -> Self {
+        self.clear_color = Some(color);
+        self
+    }
+
+    pub fn no_clear(mut self) -> Self {
+        self.clear_color = None;
+        self
+    }
+
+    /// Check for shader changes and recompile if needed.
+    pub fn check_reload(&mut self, gpu: &GpuContext) {
+        self.effect.check_reload(gpu);
+    }
+}
+
+impl RenderNode for HotEffectNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        _input: Option<&wgpu::TextureView>,
+    ) {
+        let load_op = match self.clear_color {
+            Some(color) => wgpu::LoadOp::Clear(color),
+            None => wgpu::LoadOp::Load,
+        };
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        if self.effect.uses_camera() {
+            self.effect
+                .render_with_camera(ctx.gpu, &mut render_pass, ctx.time, ctx.camera);
+        } else {
+            self.effect.render(ctx.gpu, &mut render_pass, ctx.time);
+        }
+    }
+
+    fn check_hot_reload(&mut self, gpu: &GpuContext) {
+        self.effect.check_reload(gpu);
+    }
+}
+
+/// A hot-reloadable post-processing pass node.
+pub struct HotPostProcessNode {
+    pub pass: HotPostProcessPass,
+}
+
+impl HotPostProcessNode {
+    pub fn new(pass: HotPostProcessPass) -> Self {
+        Self { pass }
+    }
+
+    /// Check for shader changes and recompile if needed.
+    pub fn check_reload(&mut self, gpu: &GpuContext) {
+        self.pass.check_reload(gpu);
+    }
+}
+
+impl RenderNode for HotPostProcessNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    ) {
+        let input_view = input.expect("HotPostProcessNode requires an input from a previous pass");
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.pass
+            .render(ctx.gpu, &mut render_pass, ctx.time, input_view);
+    }
+
+    fn check_hot_reload(&mut self, gpu: &GpuContext) {
+        self.pass.check_reload(gpu);
+    }
+}
+
+/// A hot-reloadable world-space post-processing pass node.
+pub struct HotWorldPostProcessNode {
+    pub pass: HotWorldPostProcessPass,
+}
+
+impl HotWorldPostProcessNode {
+    pub fn new(pass: HotWorldPostProcessPass) -> Self {
+        Self { pass }
+    }
+
+    /// Check for shader changes and recompile if needed.
+    pub fn check_reload(&mut self, gpu: &GpuContext) {
+        self.pass.check_reload(gpu);
+    }
+}
+
+impl RenderNode for HotWorldPostProcessNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    ) {
+        let input_view =
+            input.expect("HotWorldPostProcessNode requires an input from a previous pass");
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.pass
+            .render(ctx.gpu, &mut render_pass, ctx.time, ctx.camera, input_view);
+    }
+
+    fn check_hot_reload(&mut self, gpu: &GpuContext) {
+        self.pass.check_reload(gpu);
+    }
+}
+
 /// A composable render graph that chains render passes together.
 ///
 /// # Example
@@ -282,6 +463,14 @@ impl RenderGraph {
         self.execute_with_ui(gpu, time, camera, |_, _| {});
     }
 
+    /// Check all nodes for hot-reload changes.
+    /// Called automatically by execute_with_ui, but can be called manually if needed.
+    pub fn check_hot_reload(&mut self, gpu: &GpuContext) {
+        for node in &mut self.nodes {
+            node.check_hot_reload(gpu);
+        }
+    }
+
     /// Execute the render graph with an optional UI pass rendered on top.
     ///
     /// The UI closure receives the GPU context and render pass, allowing
@@ -303,6 +492,9 @@ impl RenderGraph {
     where
         F: FnOnce(&GpuContext, &mut wgpu::RenderPass),
     {
+        // Check for hot-reload changes before rendering
+        self.check_hot_reload(gpu);
+
         // Ensure render targets are the right size
         self.target_a.ensure_size(gpu, "RenderGraph Target A");
         self.target_b.ensure_size(gpu, "RenderGraph Target B");

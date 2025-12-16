@@ -10,9 +10,13 @@ use crate::camera::Camera;
 use crate::draw2d::{Color, Draw2d};
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
+use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
 use crate::input::Input;
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
-use crate::render_graph::{EffectNode, PostProcessNode, RenderGraph, WorldPostProcessNode};
+use crate::render_graph::{
+    EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, PostProcessNode,
+    RenderGraph, WorldPostProcessNode,
+};
 
 /// Context provided during app setup.
 pub struct SetupContext<'a> {
@@ -61,6 +65,58 @@ impl<'a> SetupContext<'a> {
     pub fn post_process_world(&mut self, shader: &str) -> &mut Self {
         let pass = WorldPostProcessPass::new(self.gpu, shader);
         self.add_node(WorldPostProcessNode::new(pass));
+        self
+    }
+
+    // ========================================================================
+    // Hot-reloadable shader methods
+    // ========================================================================
+
+    /// Add a hot-reloadable fullscreen shader effect (screen-space).
+    ///
+    /// The shader is loaded from the given file path and will automatically
+    /// reload when the file changes on disk.
+    pub fn hot_effect(&mut self, path: &str) -> &mut Self {
+        match HotEffectPass::new(self.gpu, path) {
+            Ok(effect) => self.add_node(HotEffectNode::new(effect)),
+            Err(e) => eprintln!("[hot-reload] Failed to load shader '{}': {}", path, e),
+        }
+        self
+    }
+
+    /// Add a hot-reloadable world-space shader effect (receives camera uniforms).
+    ///
+    /// The shader is loaded from the given file path and will automatically
+    /// reload when the file changes on disk.
+    pub fn hot_effect_world(&mut self, path: &str) -> &mut Self {
+        match HotEffectPass::new_world(self.gpu, path) {
+            Ok(effect) => self.add_node(HotEffectNode::new(effect)),
+            Err(e) => eprintln!("[hot-reload] Failed to load shader '{}': {}", path, e),
+        }
+        self
+    }
+
+    /// Add a hot-reloadable screen-space post-processing effect.
+    ///
+    /// The shader is loaded from the given file path and will automatically
+    /// reload when the file changes on disk.
+    pub fn hot_post_process(&mut self, path: &str) -> &mut Self {
+        match HotPostProcessPass::new(self.gpu, path) {
+            Ok(pass) => self.add_node(HotPostProcessNode::new(pass)),
+            Err(e) => eprintln!("[hot-reload] Failed to load shader '{}': {}", path, e),
+        }
+        self
+    }
+
+    /// Add a hot-reloadable world-space post-processing effect.
+    ///
+    /// The shader is loaded from the given file path and will automatically
+    /// reload when the file changes on disk.
+    pub fn hot_post_process_world(&mut self, path: &str) -> &mut Self {
+        match HotWorldPostProcessPass::new(self.gpu, path) {
+            Ok(pass) => self.add_node(HotWorldPostProcessNode::new(pass)),
+            Err(e) => eprintln!("[hot-reload] Failed to load shader '{}': {}", path, e),
+        }
         self
     }
 
