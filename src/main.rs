@@ -5,12 +5,13 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use hoplite::{EffectPass, GpuContext};
+use hoplite::{Camera, EffectPass, GpuContext};
 
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GpuContext>,
     effect: Option<EffectPass>,
+    camera: Camera,
     start_time: Instant,
 }
 
@@ -20,6 +21,10 @@ impl Default for App {
             window: None,
             gpu: None,
             effect: None,
+            camera: Camera::new()
+                .at(0.0, 0.0, 3.0)
+                .looking_at(0.0, 0.0, 0.0)
+                .with_fov(90.0),
             start_time: Instant::now(),
         }
     }
@@ -34,7 +39,9 @@ impl ApplicationHandler for App {
         );
 
         let gpu = GpuContext::new(window.clone());
-        let effect = EffectPass::new(&gpu, include_str!("shaders/gradient.wgsl"));
+
+        // World-space effect with camera
+        let effect = EffectPass::new_world(&gpu, include_str!("shaders/sphere.wgsl"));
 
         self.gpu = Some(gpu);
         self.effect = Some(effect);
@@ -54,6 +61,10 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let (Some(gpu), Some(effect)) = (&self.gpu, &self.effect) {
                     let time = self.start_time.elapsed().as_secs_f32();
+
+                    // Orbit camera around the sphere
+                    self.camera.position = [3.0 * time.cos(), 1.0, 3.0 * time.sin()];
+                    self.camera = self.camera.looking_at(0.0, 0.0, 0.0);
 
                     let output = gpu.surface.get_current_texture().unwrap();
                     let view = output
@@ -82,7 +93,7 @@ impl ApplicationHandler for App {
                                 occlusion_query_set: None,
                             });
 
-                        effect.render(gpu, &mut render_pass, time);
+                        effect.render_with_camera(gpu, &mut render_pass, time, &self.camera);
                     }
 
                     gpu.queue.submit(std::iter::once(encoder.finish()));

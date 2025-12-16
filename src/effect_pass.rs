@@ -1,33 +1,82 @@
+use crate::camera::Camera;
 use crate::gpu::GpuContext;
 
-/// Standard uniforms available to all effect passes.
+/// Standard uniforms available to all effect passes (screen-space).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct EffectUniforms {
+pub struct ScreenUniforms {
     pub resolution: [f32; 2],
     pub time: f32,
     pub _padding: f32,
+}
+
+/// Extended uniforms for world-space effect passes (includes camera).
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WorldUniforms {
+    // Base uniforms
+    pub resolution: [f32; 2],
+    pub time: f32,
+    pub fov: f32,
+    // Camera
+    pub camera_pos: [f32; 3],
+    pub _pad1: f32,
+    pub camera_forward: [f32; 3],
+    pub _pad2: f32,
+    pub camera_right: [f32; 3],
+    pub _pad3: f32,
+    pub camera_up: [f32; 3],
+    pub aspect: f32,
 }
 
 /// A full-screen shader effect pass.
 ///
 /// Renders a full-screen triangle with a custom fragment shader.
 /// Can be used for screen-space effects (post-processing, UI backgrounds)
-/// or world-space effects (raymarching, black holes) when combined with camera data.
+/// or world-space effects (raymarching, black holes) when `.with_camera()` is called.
 pub struct EffectPass {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    uses_camera: bool,
 }
 
 impl EffectPass {
-    /// Create a new effect pass from WGSL shader source.
+    /// Create a new screen-space effect pass from WGSL shader source.
     ///
-    /// The shader must define:
-    /// - `struct Uniforms { resolution: vec2f, time: f32 }` at binding 0
-    /// - `fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f`
-    /// - `fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f`
+    /// The shader should define:
+    /// ```wgsl
+    /// struct Uniforms {
+    ///     resolution: vec2f,
+    ///     time: f32,
+    /// }
+    /// @group(0) @binding(0) var<uniform> u: Uniforms;
+    /// ```
     pub fn new(gpu: &GpuContext, shader_source: &str) -> Self {
+        Self::create(gpu, shader_source, false)
+    }
+
+    /// Create a new world-space effect pass from WGSL shader source.
+    ///
+    /// The shader should define:
+    /// ```wgsl
+    /// struct Uniforms {
+    ///     resolution: vec2f,
+    ///     time: f32,
+    ///     fov: f32,
+    ///     camera_pos: vec3f,
+    ///     camera_forward: vec3f,
+    ///     camera_right: vec3f,
+    ///     camera_up: vec3f,
+    ///     aspect: f32,
+    /// }
+    /// @group(0) @binding(0) var<uniform> u: Uniforms;
+    /// ```
+    pub fn new_world(gpu: &GpuContext, shader_source: &str) -> Self {
+        Self::create(gpu, shader_source, true)
+    }
+
+    fn create(gpu: &GpuContext, shader_source: &str, uses_camera: bool) -> Self {
         let device = &gpu.device;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -35,9 +84,15 @@ impl EffectPass {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
+        let buffer_size = if uses_camera {
+            std::mem::size_of::<WorldUniforms>()
+        } else {
+            std::mem::size_of::<ScreenUniforms>()
+        };
+
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Effect Uniforms"),
-            size: std::mem::size_of::<EffectUniforms>() as u64,
+            size: buffer_size as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -104,15 +159,55 @@ impl EffectPass {
             pipeline,
             uniform_buffer,
             bind_group,
+            uses_camera,
         }
     }
 
-    /// Update uniforms and render the effect to the given render pass.
+    /// Render a screen-space effect (no camera).
     pub fn render(&self, gpu: &GpuContext, render_pass: &mut wgpu::RenderPass, time: f32) {
-        let uniforms = EffectUniforms {
+        assert!(
+            !self.uses_camera,
+            "This effect requires a camera. Use render_with_camera() instead."
+        );
+
+        let uniforms = ScreenUniforms {
             resolution: [gpu.width() as f32, gpu.height() as f32],
             time,
             _padding: 0.0,
+        };
+        gpu.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+    }
+
+    /// Render a world-space effect with camera data.
+    pub fn render_with_camera(
+        &self,
+        gpu: &GpuContext,
+        render_pass: &mut wgpu::RenderPass,
+        time: f32,
+        camera: &Camera,
+    ) {
+        assert!(
+            self.uses_camera,
+            "This effect doesn't use a camera. Use render() instead."
+        );
+
+        let uniforms = WorldUniforms {
+            resolution: [gpu.width() as f32, gpu.height() as f32],
+            time,
+            fov: camera.fov,
+            camera_pos: camera.position,
+            _pad1: 0.0,
+            camera_forward: camera.forward,
+            _pad2: 0.0,
+            camera_right: camera.right(),
+            _pad3: 0.0,
+            camera_up: camera.orthogonal_up(),
+            aspect: gpu.aspect(),
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
