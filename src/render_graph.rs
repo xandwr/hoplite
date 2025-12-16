@@ -1,11 +1,14 @@
 use crate::camera::Camera;
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
+use crate::post_process::{PostProcessPass, WorldPostProcessPass};
 
 /// A render target that can be written to by passes.
 pub struct RenderTarget {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    width: u32,
+    height: u32,
 }
 
 impl RenderTarget {
@@ -25,11 +28,19 @@ impl RenderTarget {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self { texture, view }
+        Self {
+            texture,
+            view,
+            width: gpu.width(),
+            height: gpu.height(),
+        }
     }
 
-    pub fn resize(&mut self, gpu: &GpuContext, label: &str) {
-        *self = Self::new(gpu, label);
+    /// Check if target needs resize and recreate if so.
+    pub fn ensure_size(&mut self, gpu: &GpuContext, label: &str) {
+        if self.width != gpu.width() || self.height != gpu.height() {
+            *self = Self::new(gpu, label);
+        }
     }
 }
 
@@ -44,7 +55,13 @@ pub struct RenderContext<'a> {
 /// A node in the render graph that can produce output.
 pub trait RenderNode {
     /// Execute this node, rendering to the provided target view.
-    fn execute(&self, ctx: &mut RenderContext, target: &wgpu::TextureView);
+    /// `input` is the previous pass output (None for the first pass).
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    );
 }
 
 /// An effect pass wrapped as a render node.
@@ -73,7 +90,12 @@ impl EffectNode {
 }
 
 impl RenderNode for EffectNode {
-    fn execute(&self, ctx: &mut RenderContext, target: &wgpu::TextureView) {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        _input: Option<&wgpu::TextureView>,
+    ) {
         let load_op = match self.clear_color {
             Some(color) => wgpu::LoadOp::Clear(color),
             None => wgpu::LoadOp::Load,
@@ -104,14 +126,97 @@ impl RenderNode for EffectNode {
     }
 }
 
+/// A post-processing pass that reads from the previous pass output.
+pub struct PostProcessNode {
+    pub pass: PostProcessPass,
+}
+
+impl PostProcessNode {
+    pub fn new(pass: PostProcessPass) -> Self {
+        Self { pass }
+    }
+}
+
+impl RenderNode for PostProcessNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    ) {
+        let input_view = input.expect("PostProcessNode requires an input from a previous pass");
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.pass
+            .render(ctx.gpu, &mut render_pass, ctx.time, input_view);
+    }
+}
+
+/// A world-space post-processing pass with camera uniforms.
+pub struct WorldPostProcessNode {
+    pub pass: WorldPostProcessPass,
+}
+
+impl WorldPostProcessNode {
+    pub fn new(pass: WorldPostProcessPass) -> Self {
+        Self { pass }
+    }
+}
+
+impl RenderNode for WorldPostProcessNode {
+    fn execute(
+        &self,
+        ctx: &mut RenderContext,
+        target: &wgpu::TextureView,
+        input: Option<&wgpu::TextureView>,
+    ) {
+        let input_view =
+            input.expect("WorldPostProcessNode requires an input from a previous pass");
+
+        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        self.pass
+            .render(ctx.gpu, &mut render_pass, ctx.time, ctx.camera, input_view);
+    }
+}
+
 /// A composable render graph that chains render passes together.
 ///
 /// # Example
 /// ```ignore
-/// let graph = RenderGraph::new(&gpu)
+/// let graph = RenderGraph::builder()
 ///     .node(EffectNode::new(scene_effect))
-///     .node(EffectNode::new(bloom_effect).no_clear())
-///     .build();
+///     .node(PostProcessNode::new(lensing_pass))
+///     .build(&gpu);
 ///
 /// // In render loop:
 /// graph.execute(&gpu, time, &camera);
@@ -132,13 +237,23 @@ impl RenderGraphBuilder {
     }
 
     /// Build the render graph.
-    pub fn build(self, _gpu: &GpuContext) -> RenderGraph {
-        RenderGraph { nodes: self.nodes }
+    pub fn build(self, gpu: &GpuContext) -> RenderGraph {
+        // Create ping-pong buffers for multi-pass rendering
+        let target_a = RenderTarget::new(gpu, "RenderGraph Target A");
+        let target_b = RenderTarget::new(gpu, "RenderGraph Target B");
+
+        RenderGraph {
+            nodes: self.nodes,
+            target_a,
+            target_b,
+        }
     }
 }
 
 pub struct RenderGraph {
     nodes: Vec<Box<dyn RenderNode>>,
+    target_a: RenderTarget,
+    target_b: RenderTarget,
 }
 
 impl Default for RenderGraphBuilder {
@@ -154,13 +269,13 @@ impl RenderGraph {
     }
 
     /// Execute the render graph, presenting to screen.
-    ///
-    /// All nodes render directly to the screen in sequence.
-    /// For multi-pass effects with intermediate textures, nodes can
-    /// manage their own render targets internally.
-    pub fn execute(&self, gpu: &GpuContext, time: f32, camera: &Camera) {
+    pub fn execute(&mut self, gpu: &GpuContext, time: f32, camera: &Camera) {
+        // Ensure render targets are the right size
+        self.target_a.ensure_size(gpu, "RenderGraph Target A");
+        self.target_b.ensure_size(gpu, "RenderGraph Target B");
+
         let output = gpu.surface.get_current_texture().unwrap();
-        let view = output
+        let screen_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -170,6 +285,8 @@ impl RenderGraph {
                 label: Some("RenderGraph Encoder"),
             });
 
+        let node_count = self.nodes.len();
+
         {
             let mut ctx = RenderContext {
                 gpu,
@@ -178,8 +295,35 @@ impl RenderGraph {
                 camera,
             };
 
-            for node in &self.nodes {
-                node.execute(&mut ctx, &view);
+            // For single node, render directly to screen
+            if node_count == 1 {
+                self.nodes[0].execute(&mut ctx, &screen_view, None);
+            } else {
+                // Multi-pass: ping-pong between targets, final pass goes to screen
+                let mut current_input: Option<&wgpu::TextureView> = None;
+
+                for (i, node) in self.nodes.iter().enumerate() {
+                    let is_last = i == node_count - 1;
+
+                    let target = if is_last {
+                        &screen_view
+                    } else if i % 2 == 0 {
+                        &self.target_a.view
+                    } else {
+                        &self.target_b.view
+                    };
+
+                    node.execute(&mut ctx, target, current_input);
+
+                    // Set up input for next pass
+                    if !is_last {
+                        current_input = Some(if i % 2 == 0 {
+                            &self.target_a.view
+                        } else {
+                            &self.target_b.view
+                        });
+                    }
+                }
             }
         }
 
