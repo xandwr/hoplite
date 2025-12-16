@@ -152,8 +152,8 @@ pub struct WorldUniforms {
 ///
 /// # Modes
 ///
-/// - **Screen-space** (via [`new`](Self::new)): Uses [`ScreenUniforms`] with resolution and time.
-/// - **World-space** (via [`new_world`](Self::new_world)): Uses [`WorldUniforms`] with full camera data.
+/// - **Screen-space** (via [`new`](Self::new)): Uses `ScreenUniforms` with resolution and time.
+/// - **World-space** (via [`new_world`](Self::new_world)): Uses `WorldUniforms` with full camera data.
 ///
 /// # Example
 ///
@@ -178,20 +178,20 @@ pub struct EffectPass {
 impl EffectPass {
     /// Create a new screen-space effect pass from WGSL shader source.
     ///
-    /// The shader receives [`ScreenUniforms`] at `@group(0) @binding(0)` and must
+    /// The shader receives `ScreenUniforms` at `@group(0) @binding(0)` and must
     /// define `vs` and `fs` entry points. Use [`render`](Self::render) to draw.
     ///
-    /// See the [module documentation](self) for shader requirements.
+    /// See the module-level documentation for shader requirements.
     pub fn new(gpu: &GpuContext, shader_source: &str) -> Self {
         Self::create(gpu, shader_source, false)
     }
 
     /// Create a new world-space effect pass from WGSL shader source.
     ///
-    /// The shader receives [`WorldUniforms`] at `@group(0) @binding(0)` and must
+    /// The shader receives `WorldUniforms` at `@group(0) @binding(0)` and must
     /// define `vs` and `fs` entry points. Use [`render_with_camera`](Self::render_with_camera) to draw.
     ///
-    /// See [`WorldUniforms`] for the uniform layout and ray construction example.
+    /// See `WorldUniforms` for the uniform layout and ray construction example.
     pub fn new_world(gpu: &GpuContext, shader_source: &str) -> Self {
         Self::create(gpu, shader_source, true)
     }
@@ -286,7 +286,7 @@ impl EffectPass {
 
     /// Render a screen-space effect (no camera).
     ///
-    /// Uploads [`ScreenUniforms`] and draws a fullscreen triangle.
+    /// Uploads `ScreenUniforms` and draws a fullscreen triangle.
     ///
     /// # Panics
     ///
@@ -313,7 +313,7 @@ impl EffectPass {
 
     /// Render a world-space effect with camera data.
     ///
-    /// Uploads [`WorldUniforms`] (including camera position and orientation) and draws
+    /// Uploads `WorldUniforms` (including camera position and orientation) and draws
     /// a fullscreen triangle. The shader can use this data to cast rays into the scene.
     ///
     /// # Panics

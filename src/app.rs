@@ -1,3 +1,77 @@
+//! Application framework and main entry point for Hoplite.
+//!
+//! This module provides the core application lifecycle management for Hoplite applications,
+//! including window creation, event handling, and the render loop. It exposes a simple,
+//! closure-based API that handles all the complexity of GPU initialization, resource
+//! management, and frame timing.
+//!
+//! # Architecture
+//!
+//! The application framework is built around two phases:
+//!
+//! 1. **Setup Phase**: Called once at startup via [`SetupContext`]. Use this to:
+//!    - Load fonts, textures, and sprites
+//!    - Configure the render pipeline (effects, post-processing)
+//!    - Create 3D meshes
+//!    - Set up any initial state your application needs
+//!
+//! 2. **Frame Phase**: Called every frame via [`Frame`]. Use this to:
+//!    - Read input state
+//!    - Update game/application logic
+//!    - Issue draw commands (text, rectangles, sprites, meshes)
+//!
+//! # Quick Start
+//!
+//! The simplest Hoplite application:
+//!
+//! ```ignore
+//! use hoplite::app::run;
+//!
+//! fn main() {
+//!     run(|ctx| {
+//!         // Setup: load a font for text rendering
+//!         ctx.default_font(16.0);
+//!
+//!         // Return the frame closure
+//!         move |frame| {
+//!             frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+//!         }
+//!     });
+//! }
+//! ```
+//!
+//! # Render Pipeline
+//!
+//! Hoplite uses a node-based render graph. The order you add effects matters:
+//!
+//! ```ignore
+//! run(|ctx| {
+//!     ctx.default_font(16.0);
+//!
+//!     // 1. Background effect (rendered first, clears screen)
+//!     ctx.effect_world(include_str!("background.wgsl"));
+//!
+//!     // 2. Enable 3D mesh rendering
+//!     ctx.enable_mesh_rendering();
+//!
+//!     // 3. Post-processing (applied after meshes)
+//!     ctx.post_process_world(include_str!("bloom.wgsl"));
+//!
+//!     // 4. 2D UI is always rendered last, on top of everything
+//!
+//!     move |frame| { /* ... */ }
+//! });
+//! ```
+//!
+//! # Hot Reloading
+//!
+//! For rapid shader development, use the `hot_*` variants which reload from disk:
+//!
+//! ```ignore
+//! ctx.hot_effect("shaders/background.wgsl");      // Reloads on file change
+//! ctx.hot_post_process("shaders/bloom.wgsl");     // Reloads on file change
+//! ```
+
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -23,36 +97,134 @@ use crate::texture::{Sprite, Texture};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Context provided during app setup.
+/// Context provided during the setup phase of a Hoplite application.
+///
+/// `SetupContext` is passed to your setup closure and provides methods for:
+/// - Loading and configuring fonts, textures, and sprites
+/// - Building the render pipeline (effects, post-processing)
+/// - Creating 3D meshes and enabling mesh rendering
+///
+/// The setup phase runs once before the first frame. Any resources loaded here
+/// remain available throughout the application's lifetime.
+///
+/// # Example
+///
+/// ```ignore
+/// run(|ctx| {
+///     // Load the default font at 16pt
+///     ctx.default_font(16.0);
+///
+///     // Add a fullscreen shader effect
+///     ctx.effect_world(include_str!("background.wgsl"));
+///
+///     // Load a sprite for use in the frame loop
+///     let player_sprite = ctx.sprite_from_file("assets/player.png").unwrap();
+///
+///     // Create a cube mesh
+///     ctx.enable_mesh_rendering();
+///     let cube = ctx.mesh_cube();
+///
+///     move |frame| {
+///         frame.sprite(player_sprite, 100.0, 100.0);
+///         // ...
+///     }
+/// });
+/// ```
+///
+/// # Render Pipeline Order
+///
+/// The order in which you call effect/post-process methods determines the render order:
+/// 1. Effects are rendered first (each can read the previous output)
+/// 2. Mesh rendering (if enabled) happens at its position in the chain
+/// 3. Post-processing effects are applied in order
+/// 4. 2D UI (text, sprites, rectangles) is always rendered last
 pub struct SetupContext<'a> {
+    /// GPU context for creating GPU resources directly.
     pub gpu: &'a GpuContext,
+    /// Asset manager for loading fonts and other managed resources.
     pub assets: &'a mut Assets,
+    /// 2D drawing context for registering sprites.
     pub draw: &'a mut Draw2d,
+    /// Storage for the default font ID (set via [`Self::default_font`]).
     default_font: &'a mut Option<FontId>,
+    /// The render graph being built (lazily initialized on first effect/pass).
     graph_builder: &'a mut Option<RenderGraph>,
+    /// Shared mesh queue for 3D rendering.
     mesh_queue: &'a Rc<RefCell<MeshQueue>>,
 }
 
 impl<'a> SetupContext<'a> {
-    /// Load the default font at the specified size.
-    /// This font will be used by `Frame::text()` for convenience.
+    /// Load and register the default font at the specified size.
+    ///
+    /// This font will be used by [`Frame::text`] and [`Frame::text_color`] for
+    /// convenient text rendering without needing to pass a font ID each time.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Font size in pixels (e.g., 16.0 for standard UI text)
+    ///
+    /// # Returns
+    ///
+    /// The [`FontId`] for the loaded font, which can also be used with the
+    /// lower-level `Draw2d::text` method if needed.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.default_font(16.0);
+    /// // Later in frame:
+    /// frame.text(10.0, 10.0, "Hello!");
+    /// ```
     pub fn default_font(&mut self, size: f32) -> FontId {
         let font = self.assets.default_font(size);
         *self.default_font = Some(font);
         font
     }
 
-    /// Add a fullscreen shader effect to the render pipeline.
+    // ========================================================================
+    // Shader Effect Methods (Embedded)
+    // ========================================================================
+
+    /// Add a fullscreen screen-space shader effect to the render pipeline.
     ///
-    /// Effects are rendered in the order they're added. The first effect
-    /// clears the screen, subsequent effects chain together.
+    /// Screen-space effects do not receive camera uniforms - they operate purely
+    /// in normalized device coordinates. Use [`Self::effect_world`] if your shader
+    /// needs camera information.
+    ///
+    /// Effects are rendered in the order they're added. The first effect clears
+    /// the screen; subsequent effects can read the previous effect's output.
+    ///
+    /// # Arguments
+    ///
+    /// * `shader` - WGSL shader source code (typically via `include_str!`)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.effect(include_str!("shaders/gradient.wgsl"));
+    /// ```
     pub fn effect(&mut self, shader: &str) -> &mut Self {
         let effect = EffectPass::new(self.gpu, shader);
         self.add_node(EffectNode::new(effect));
         self
     }
 
-    /// Add a world-space shader effect (receives camera uniforms).
+    /// Add a fullscreen world-space shader effect to the render pipeline.
+    ///
+    /// World-space effects receive camera uniforms (view matrix, projection matrix,
+    /// camera position, etc.) allowing them to perform 3D calculations like ray
+    /// marching or world-space lighting.
+    ///
+    /// # Arguments
+    ///
+    /// * `shader` - WGSL shader source code (typically via `include_str!`)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Ray marching shader that uses camera position and direction
+    /// ctx.effect_world(include_str!("shaders/raymarching.wgsl"));
+    /// ```
     pub fn effect_world(&mut self, shader: &str) -> &mut Self {
         let effect = EffectPass::new_world(self.gpu, shader);
         self.add_node(EffectNode::new(effect));
@@ -61,14 +233,41 @@ impl<'a> SetupContext<'a> {
 
     /// Add a screen-space post-processing effect.
     ///
-    /// Post-process effects read from the previous pass output.
+    /// Post-processing effects read from the previous render pass output and write
+    /// to a new buffer. They're ideal for effects like color grading, vignette,
+    /// or simple blur that don't need 3D information.
+    ///
+    /// # Arguments
+    ///
+    /// * `shader` - WGSL shader source code (typically via `include_str!`)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.post_process(include_str!("shaders/vignette.wgsl"));
+    /// ```
     pub fn post_process(&mut self, shader: &str) -> &mut Self {
         let pass = PostProcessPass::new(self.gpu, shader);
         self.add_node(PostProcessNode::new(pass));
         self
     }
 
-    /// Add a world-space post-processing effect (receives camera uniforms).
+    /// Add a world-space post-processing effect.
+    ///
+    /// Similar to [`Self::post_process`], but also receives camera uniforms.
+    /// Useful for effects that need depth-based calculations, world-space
+    /// fog, or other 3D-aware post-processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `shader` - WGSL shader source code (typically via `include_str!`)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Gravitational lensing effect that needs world-space ray directions
+    /// ctx.post_process_world(include_str!("shaders/lensing.wgsl"));
+    /// ```
     pub fn post_process_world(&mut self, shader: &str) -> &mut Self {
         let pass = WorldPostProcessPass::new(self.gpu, shader);
         self.add_node(WorldPostProcessNode::new(pass));
@@ -76,13 +275,28 @@ impl<'a> SetupContext<'a> {
     }
 
     // ========================================================================
-    // Hot-reloadable shader methods
+    // Shader Effect Methods (Hot-Reloadable)
     // ========================================================================
 
-    /// Add a hot-reloadable fullscreen shader effect (screen-space).
+    /// Add a hot-reloadable fullscreen screen-space shader effect.
     ///
-    /// The shader is loaded from the given file path and will automatically
-    /// reload when the file changes on disk.
+    /// The shader is loaded from a file path on disk and will automatically
+    /// reload whenever the file is modified. This is invaluable during shader
+    /// development - save your file and see changes instantly without restarting.
+    ///
+    /// If the shader fails to load or compile, an error is printed to stderr
+    /// and the effect is skipped (the application continues running).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the WGSL shader file on disk
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.hot_effect("shaders/gradient.wgsl");
+    /// // Now edit gradient.wgsl and save - changes appear immediately!
+    /// ```
     pub fn hot_effect(&mut self, path: &str) -> &mut Self {
         match HotEffectPass::new(self.gpu, path) {
             Ok(effect) => self.add_node(HotEffectNode::new(effect)),
@@ -91,10 +305,20 @@ impl<'a> SetupContext<'a> {
         self
     }
 
-    /// Add a hot-reloadable world-space shader effect (receives camera uniforms).
+    /// Add a hot-reloadable fullscreen world-space shader effect.
     ///
-    /// The shader is loaded from the given file path and will automatically
-    /// reload when the file changes on disk.
+    /// Like [`Self::hot_effect`], but the shader receives camera uniforms for
+    /// 3D calculations. See [`Self::effect_world`] for details on world-space effects.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the WGSL shader file on disk
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.hot_effect_world("shaders/raymarching.wgsl");
+    /// ```
     pub fn hot_effect_world(&mut self, path: &str) -> &mut Self {
         match HotEffectPass::new_world(self.gpu, path) {
             Ok(effect) => self.add_node(HotEffectNode::new(effect)),
@@ -105,8 +329,18 @@ impl<'a> SetupContext<'a> {
 
     /// Add a hot-reloadable screen-space post-processing effect.
     ///
-    /// The shader is loaded from the given file path and will automatically
-    /// reload when the file changes on disk.
+    /// Like [`Self::hot_effect`], but configured as a post-processing pass that
+    /// reads from the previous render output. See [`Self::post_process`] for details.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the WGSL shader file on disk
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.hot_post_process("shaders/bloom.wgsl");
+    /// ```
     pub fn hot_post_process(&mut self, path: &str) -> &mut Self {
         match HotPostProcessPass::new(self.gpu, path) {
             Ok(pass) => self.add_node(HotPostProcessNode::new(pass)),
@@ -117,8 +351,18 @@ impl<'a> SetupContext<'a> {
 
     /// Add a hot-reloadable world-space post-processing effect.
     ///
-    /// The shader is loaded from the given file path and will automatically
-    /// reload when the file changes on disk.
+    /// Like [`Self::hot_post_process`], but also receives camera uniforms.
+    /// See [`Self::post_process_world`] for details.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the WGSL shader file on disk
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.hot_post_process_world("shaders/lensing.wgsl");
+    /// ```
     pub fn hot_post_process_world(&mut self, path: &str) -> &mut Self {
         match HotWorldPostProcessPass::new(self.gpu, path) {
             Ok(pass) => self.add_node(HotWorldPostProcessNode::new(pass)),
@@ -127,71 +371,195 @@ impl<'a> SetupContext<'a> {
         self
     }
 
+    /// Internal helper to add a render node to the graph.
+    ///
+    /// Lazily initializes the render graph on first use, then appends
+    /// subsequent nodes to the existing graph.
     fn add_node<N: crate::render_graph::RenderNode + 'static>(&mut self, node: N) {
         if self.graph_builder.is_none() {
             *self.graph_builder = Some(RenderGraph::builder().node(node).build(self.gpu));
         } else {
-            // For now, we rebuild - could optimize later
+            // Rebuild with new node - could optimize later with incremental updates
             let old = self.graph_builder.take().unwrap();
             *self.graph_builder = Some(old.with_node(node, self.gpu));
         }
     }
 
     // ========================================================================
-    // Mesh methods
+    // 3D Mesh Methods
     // ========================================================================
 
     /// Enable 3D mesh rendering in the pipeline.
     ///
-    /// This adds a mesh rendering pass to the render graph. Call this before
-    /// adding post-processing effects if you want meshes to be affected by them.
+    /// This adds a mesh rendering pass to the render graph. The position in the
+    /// pipeline determines what effects are applied to meshes:
     ///
-    /// Returns self for chaining.
+    /// - Call **before** post-processing to apply effects to meshes
+    /// - Call **after** effects to render meshes on top of shader backgrounds
+    ///
+    /// # Returns
+    ///
+    /// `&mut Self` for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.effect_world(include_str!("background.wgsl"))  // Rendered first
+    ///    .enable_mesh_rendering()                         // Meshes on top
+    ///    .post_process(include_str!("bloom.wgsl"));       // Bloom applied to everything
+    /// ```
     pub fn enable_mesh_rendering(&mut self) -> &mut Self {
         let mesh_node = MeshNode::new(self.gpu, Rc::clone(self.mesh_queue));
         self.add_node(mesh_node);
         self
     }
 
-    /// Create a unit cube mesh and return its index.
+    /// Create a unit cube mesh (1x1x1, centered at origin).
+    ///
+    /// # Returns
+    ///
+    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let cube = ctx.mesh_cube();
+    /// // In frame:
+    /// frame.draw_mesh(cube, Transform::translation(0.0, 0.0, -5.0), Color::RED);
+    /// ```
     pub fn mesh_cube(&mut self) -> usize {
         let mesh = Mesh::cube(self.gpu);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
 
-    /// Create a sphere mesh and return its index.
+    /// Create a UV sphere mesh with the specified tessellation.
+    ///
+    /// Higher segment/ring counts produce smoother spheres at the cost of
+    /// more vertices. A sphere with 16 segments and 12 rings is usually
+    /// sufficient for most purposes.
+    ///
+    /// # Arguments
+    ///
+    /// * `segments` - Number of horizontal divisions (longitude lines)
+    /// * `rings` - Number of vertical divisions (latitude lines)
+    ///
+    /// # Returns
+    ///
+    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let sphere = ctx.mesh_sphere(32, 24);  // Smooth sphere
+    /// let low_poly = ctx.mesh_sphere(8, 6); // Chunky sphere
+    /// ```
     pub fn mesh_sphere(&mut self, segments: u32, rings: u32) -> usize {
         let mesh = Mesh::sphere(self.gpu, segments, rings);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
 
-    /// Create a flat plane mesh and return its index.
+    /// Create a flat horizontal plane mesh.
+    ///
+    /// The plane is centered at the origin, lying flat on the XZ plane
+    /// (normal pointing up in +Y).
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Total width/depth of the plane (extends ±size/2 from center)
+    ///
+    /// # Returns
+    ///
+    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let ground = ctx.mesh_plane(100.0);  // 100x100 ground plane
+    /// ```
     pub fn mesh_plane(&mut self, size: f32) -> usize {
         let mesh = Mesh::plane(self.gpu, size);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
 
-    /// Add a custom mesh and return its index.
+    /// Add a custom mesh to the mesh queue.
+    ///
+    /// Use this to add meshes created manually or loaded from external sources.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh` - A [`Mesh`] instance with vertex and index data
+    ///
+    /// # Returns
+    ///
+    /// A mesh index that can be passed to [`Frame::draw_mesh`].
     pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
 
     // ========================================================================
-    // Texture methods
+    // 3D Texture Methods
     // ========================================================================
 
-    /// Add a texture and return its index.
+    /// Add a texture to the texture pool for 3D mesh rendering.
+    ///
+    /// Textures are applied to meshes using [`Frame::draw_mesh_textured`].
+    ///
+    /// # Arguments
+    ///
+    /// * `texture` - A [`Texture`] instance
+    ///
+    /// # Returns
+    ///
+    /// A texture index that can be passed to [`Frame::draw_mesh_textured`].
     pub fn add_texture(&mut self, texture: Texture) -> usize {
         self.mesh_queue.borrow_mut().add_texture(texture)
     }
 
-    /// Load a texture from a file path and return its index.
+    /// Load a texture from a file path.
+    ///
+    /// Supports common image formats (PNG, JPEG, etc.) via the `image` crate.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the image file
+    ///
+    /// # Returns
+    ///
+    /// A texture index on success, or an [`image::ImageError`] on failure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let brick_tex = ctx.texture_from_file("assets/brick.png")?;
+    /// // In frame:
+    /// frame.draw_mesh_textured(cube, transform, Color::WHITE, brick_tex);
+    /// ```
     pub fn texture_from_file(&mut self, path: &str) -> Result<usize, image::ImageError> {
         let texture = Texture::from_file(self.gpu, path)?;
         Ok(self.add_texture(texture))
     }
 
-    /// Load a texture from embedded bytes and return its index.
+    /// Load a texture from embedded bytes.
+    ///
+    /// Useful for bundling textures directly in the executable via `include_bytes!`.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Raw image file bytes (PNG, JPEG, etc.)
+    /// * `label` - Debug label for the texture (shown in GPU debugging tools)
+    ///
+    /// # Returns
+    ///
+    /// A texture index on success, or an [`image::ImageError`] on failure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let tex = ctx.texture_from_bytes(
+    ///     include_bytes!("../assets/brick.png"),
+    ///     "brick texture"
+    /// )?;
+    /// ```
     pub fn texture_from_bytes(
         &mut self,
         bytes: &[u8],
@@ -201,46 +569,150 @@ impl<'a> SetupContext<'a> {
         Ok(self.add_texture(texture))
     }
 
-    /// Create a procedural Minecraft-style noise texture and return its index.
+    /// Create a procedural Minecraft-style blocky noise texture.
+    ///
+    /// Generates a random pattern of earthy colors (browns, grays) suitable
+    /// for dirt/stone surfaces. Uses nearest-neighbor filtering for that
+    /// classic blocky aesthetic.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Texture dimensions (creates a size×size texture)
+    /// * `seed` - Random seed for reproducible generation
+    ///
+    /// # Returns
+    ///
+    /// A texture index.
     pub fn texture_minecraft_noise(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_noise(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
-    /// Create a procedural Minecraft-style grass texture and return its index.
+    /// Create a procedural Minecraft-style grass texture.
+    ///
+    /// Generates a green grass pattern with color variation.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Texture dimensions (creates a size×size texture)
+    /// * `seed` - Random seed for reproducible generation
+    ///
+    /// # Returns
+    ///
+    /// A texture index.
     pub fn texture_minecraft_grass(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_grass(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
-    /// Create a procedural Minecraft-style cobblestone texture and return its index.
+    /// Create a procedural Minecraft-style cobblestone texture.
+    ///
+    /// Generates a gray stone pattern with cracks and variation.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Texture dimensions (creates a size×size texture)
+    /// * `seed` - Random seed for reproducible generation
+    ///
+    /// # Returns
+    ///
+    /// A texture index.
     pub fn texture_minecraft_cobblestone(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_stone(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
     // ========================================================================
-    // Sprite methods (2D layer)
+    // 2D Sprite Methods
     // ========================================================================
 
-    /// Add a 2D sprite and return its ID.
+    /// Add a pre-created sprite to the 2D layer.
+    ///
+    /// Sprites are rendered on top of all 3D content and effects as part
+    /// of the UI layer.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite` - A [`Sprite`] instance
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] for use with [`Frame::sprite`] and related methods.
     pub fn add_sprite(&mut self, sprite: Sprite) -> SpriteId {
         self.draw.add_sprite(sprite)
     }
 
-    /// Load a 2D sprite from a file path and return its ID.
+    /// Load a 2D sprite from a file path with linear (smooth) filtering.
+    ///
+    /// Linear filtering smoothly interpolates between pixels when the sprite
+    /// is scaled. Use [`Self::sprite_from_file_nearest`] for pixel art.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the image file
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] on success, or an [`image::ImageError`] on failure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let player = ctx.sprite_from_file("assets/player.png")?;
+    /// // In frame:
+    /// frame.sprite(player, 100.0, 200.0);
+    /// ```
     pub fn sprite_from_file(&mut self, path: &str) -> Result<SpriteId, image::ImageError> {
         let sprite = Sprite::from_file(self.gpu, path)?;
         Ok(self.add_sprite(sprite))
     }
 
-    /// Load a 2D sprite from a file with nearest-neighbor filtering (pixel art).
+    /// Load a 2D sprite from a file with nearest-neighbor (pixelated) filtering.
+    ///
+    /// Nearest-neighbor filtering preserves sharp pixel edges when scaling,
+    /// making it ideal for pixel art sprites.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the image file
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] on success, or an [`image::ImageError`] on failure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let character = ctx.sprite_from_file_nearest("assets/character_16x16.png")?;
+    /// // Scale up without blur:
+    /// frame.sprite_scaled(character, x, y, 64.0, 64.0);
+    /// ```
     pub fn sprite_from_file_nearest(&mut self, path: &str) -> Result<SpriteId, image::ImageError> {
         let sprite = Sprite::from_file_nearest(self.gpu, path)?;
         Ok(self.add_sprite(sprite))
     }
 
-    /// Load a 2D sprite from embedded bytes and return its ID.
+    /// Load a 2D sprite from embedded bytes with linear filtering.
+    ///
+    /// Useful for bundling sprites directly in the executable via `include_bytes!`.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Raw image file bytes (PNG, JPEG, etc.)
+    /// * `label` - Debug label for GPU debugging tools
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] on success, or an [`image::ImageError`] on failure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let icon = ctx.sprite_from_bytes(
+    ///     include_bytes!("../assets/icon.png"),
+    ///     "app icon"
+    /// )?;
+    /// ```
     pub fn sprite_from_bytes(
         &mut self,
         bytes: &[u8],
@@ -251,6 +723,17 @@ impl<'a> SetupContext<'a> {
     }
 
     /// Load a 2D sprite from embedded bytes with nearest-neighbor filtering.
+    ///
+    /// Combines embedded loading with pixel-art-friendly filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Raw image file bytes (PNG, JPEG, etc.)
+    /// * `label` - Debug label for GPU debugging tools
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] on success, or an [`image::ImageError`] on failure.
     pub fn sprite_from_bytes_nearest(
         &mut self,
         bytes: &[u8],
@@ -260,7 +743,18 @@ impl<'a> SetupContext<'a> {
         Ok(self.add_sprite(sprite))
     }
 
-    /// Create a sprite from a procedural Minecraft noise texture (for demo/debug).
+    /// Create a sprite from a procedural Minecraft-style noise texture.
+    ///
+    /// Useful for testing and demos. Generates a blocky, earthy pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Sprite dimensions (creates a size×size sprite)
+    /// * `seed` - Random seed for reproducible generation
+    ///
+    /// # Returns
+    ///
+    /// A [`SpriteId`] for the generated sprite.
     pub fn sprite_minecraft_noise(&mut self, size: u32, seed: u32) -> SpriteId {
         let data = generate_minecraft_noise_data(size, seed);
         let sprite =
@@ -269,10 +763,24 @@ impl<'a> SetupContext<'a> {
     }
 }
 
-/// Helper to generate minecraft noise texture data (duplicated from Texture for Sprite use)
+/// Generate RGBA pixel data for a Minecraft-style blocky noise texture.
+///
+/// This is an internal helper function that generates procedural texture data
+/// using a simple hash-based approach. The result mimics the earthy, blocky
+/// aesthetic of Minecraft textures.
+///
+/// # Arguments
+///
+/// * `size` - Width and height of the texture in pixels
+/// * `seed` - Random seed for reproducible generation
+///
+/// # Returns
+///
+/// A `Vec<u8>` containing RGBA pixel data (4 bytes per pixel, row-major order).
 fn generate_minecraft_noise_data(size: u32, seed: u32) -> Vec<u8> {
     let mut data = vec![0u8; (size * size * 4) as usize];
 
+    // Earthy color palette for the blocky aesthetic
     let colors: &[[u8; 3]] = &[
         [139, 90, 43],   // Brown (dirt)
         [128, 128, 128], // Gray (stone)
@@ -284,6 +792,7 @@ fn generate_minecraft_noise_data(size: u32, seed: u32) -> Vec<u8> {
         [70, 60, 50],    // Very dark brown
     ];
 
+    /// Simple hash function for pseudo-random per-pixel values.
     fn hash(x: u32, y: u32, seed: u32) -> u32 {
         let mut h = seed;
         h = h.wrapping_add(x.wrapping_mul(374761393));
@@ -300,67 +809,190 @@ fn generate_minecraft_noise_data(size: u32, seed: u32) -> Vec<u8> {
             let h = hash(x, y, seed);
             let color_idx = (h % colors.len() as u32) as usize;
             let base = colors[color_idx];
+            // Add slight per-pixel variation for more natural look
             let variation = ((hash(x + 1000, y + 1000, seed) % 30) as i32) - 15;
 
             data[idx] = (base[0] as i32 + variation).clamp(0, 255) as u8;
             data[idx + 1] = (base[1] as i32 + variation).clamp(0, 255) as u8;
             data[idx + 2] = (base[2] as i32 + variation).clamp(0, 255) as u8;
-            data[idx + 3] = 255;
+            data[idx + 3] = 255; // Fully opaque
         }
     }
 
     data
 }
 
-/// Context provided each frame for rendering.
+/// Context provided each frame for rendering and game logic.
 ///
-/// Frame provides a simplified API for common operations. For advanced use,
-/// the underlying `gpu`, `assets`, and `draw` fields are still accessible.
+/// `Frame` is passed to your frame closure every frame and provides:
+/// - **Timing info**: elapsed time, delta time, FPS
+/// - **Input state**: keyboard, mouse (via the [`Input`] field)
+/// - **Camera control**: position, rotation, zoom
+/// - **Drawing methods**: text, rectangles, sprites, meshes
+///
+/// For simple applications, the convenience methods (`text`, `rect`, `sprite`, etc.)
+/// are usually sufficient. For advanced use cases, the underlying `gpu`, `assets`,
+/// and `draw` fields provide direct access to lower-level APIs.
+///
+/// # Example
+///
+/// ```ignore
+/// move |frame| {
+///     // Update camera based on input
+///     if frame.input.key_held(KeyCode::KeyW) {
+///         frame.camera.position.z -= 5.0 * frame.dt;
+///     }
+///
+///     // Draw UI
+///     frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+///     frame.text(10.0, 30.0, &format!("Time: {:.1}s", frame.time));
+///
+///     // Draw 3D meshes
+///     let transform = Transform::translation(0.0, 0.0, -5.0)
+///         .rotate_y(frame.time);
+///     frame.draw_mesh(cube_mesh, transform, Color::RED);
+/// }
+/// ```
 pub struct Frame<'a> {
-    /// GPU context for advanced rendering.
+    /// GPU context for advanced rendering operations.
+    ///
+    /// Provides direct access to wgpu device, queue, and surface for custom
+    /// rendering code that goes beyond the built-in helpers.
     pub gpu: &'a GpuContext,
-    /// Asset manager for loading fonts, textures, etc.
+
+    /// Asset manager containing loaded fonts.
+    ///
+    /// Use with `Draw2d::text` for custom font rendering. The convenience
+    /// methods `Frame::text` and `Frame::text_color` use the default font
+    /// set during setup.
     pub assets: &'a Assets,
+
     /// Low-level 2D drawing API.
+    ///
+    /// Provides direct control over 2D rendering including custom vertex
+    /// batching and advanced text layout. The `Frame::text`, `Frame::rect`,
+    /// and `Frame::sprite` methods delegate to this internally.
     pub draw: &'a mut Draw2d,
-    /// Current camera state.
+
+    /// Camera for 3D rendering.
+    ///
+    /// Modify position, rotation, field of view, etc. to control the viewpoint.
+    /// Changes take effect immediately for subsequent draw calls.
     pub camera: &'a mut Camera,
+
     /// Input state for this frame.
+    ///
+    /// Query keyboard and mouse state. Input is captured once per frame,
+    /// so the same query returns the same result throughout a frame.
     pub input: &'a Input,
-    /// Total elapsed time in seconds.
+
+    /// Total elapsed time since application start, in seconds.
+    ///
+    /// Useful for animations and time-based effects. Continuously increases;
+    /// never resets during the application lifetime.
     pub time: f32,
-    /// Delta time since last frame in seconds.
+
+    /// Time elapsed since the previous frame, in seconds.
+    ///
+    /// Use this for frame-rate-independent movement and physics:
+    /// `position += velocity * frame.dt`
+    ///
+    /// Typically around 0.016 (60 FPS) or 0.008 (120 FPS).
     pub dt: f32,
-    /// Default font (if set during setup).
+
+    /// Default font set during setup (if any).
     default_font: Option<FontId>,
-    /// Mesh queue for 3D rendering.
+
+    /// Shared mesh queue for 3D draw calls.
     mesh_queue: Rc<RefCell<MeshQueue>>,
 }
 
 impl Frame<'_> {
-    /// Current frames per second.
+    // ========================================================================
+    // Timing & Screen Info
+    // ========================================================================
+
+    /// Calculate the current frames per second based on delta time.
+    ///
+    /// This is a simple reciprocal of `dt`. For smoothed FPS display,
+    /// consider averaging over multiple frames in your application code.
+    ///
+    /// # Returns
+    ///
+    /// FPS as a float. Returns 0.0 if `dt` is zero (shouldn't happen in practice).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+    /// ```
     pub fn fps(&self) -> f32 {
         if self.dt > 0.0 { 1.0 / self.dt } else { 0.0 }
     }
 
-    /// Screen width in pixels.
+    /// Get the current window/screen width in pixels.
+    ///
+    /// Useful for positioning UI elements relative to screen edges or for
+    /// calculating aspect ratios.
     pub fn width(&self) -> u32 {
         self.gpu.width()
     }
 
-    /// Screen height in pixels.
+    /// Get the current window/screen height in pixels.
+    ///
+    /// Useful for positioning UI elements relative to screen edges or for
+    /// calculating aspect ratios.
     pub fn height(&self) -> u32 {
         self.gpu.height()
     }
 
-    /// Draw text at the given position using the default font.
+    // ========================================================================
+    // Text Rendering
+    // ========================================================================
+
+    /// Draw white text at the given screen position using the default font.
     ///
-    /// Panics if no default font was set during setup.
+    /// Coordinates are in screen pixels with (0, 0) at top-left.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no default font was set during setup via [`SetupContext::default_font`].
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - X position in screen pixels
+    /// * `y` - Y position in screen pixels
+    /// * `text` - The string to render
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// frame.text(10.0, 10.0, "Hello, Hoplite!");
+    /// frame.text(10.0, 30.0, &format!("Score: {}", score));
+    /// ```
     pub fn text(&mut self, x: f32, y: f32, text: &str) {
         self.text_color(x, y, text, Color::WHITE)
     }
 
-    /// Draw text with a custom color using the default font.
+    /// Draw colored text at the given screen position using the default font.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no default font was set during setup.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - X position in screen pixels
+    /// * `y` - Y position in screen pixels
+    /// * `text` - The string to render
+    /// * `color` - Text color
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// frame.text_color(10.0, 50.0, "WARNING!", Color::RED);
+    /// frame.text_color(10.0, 70.0, "Health OK", Color::GREEN);
+    /// ```
     pub fn text_color(&mut self, x: f32, y: f32, text: &str, color: Color) {
         let font = self
             .default_font
@@ -368,22 +1000,86 @@ impl Frame<'_> {
         self.draw.text(self.assets, font, x, y, text, color);
     }
 
-    /// Draw a colored rectangle.
+    // ========================================================================
+    // Rectangle & Panel Rendering
+    // ========================================================================
+
+    /// Draw a solid colored rectangle.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - X position of top-left corner in screen pixels
+    /// * `y` - Y position of top-left corner in screen pixels
+    /// * `w` - Width in pixels
+    /// * `h` - Height in pixels
+    /// * `color` - Fill color
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Draw a red health bar background
+    /// frame.rect(10.0, 100.0, 200.0, 20.0, Color::rgb(0.2, 0.0, 0.0));
+    /// // Draw the health fill
+    /// frame.rect(10.0, 100.0, health_pct * 200.0, 20.0, Color::RED);
+    /// ```
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         self.draw.rect(x, y, w, h, color);
     }
 
-    /// Draw a panel with background, border, and optional title.
+    /// Draw a UI panel with a styled background and border.
     ///
-    /// Returns the content area y-offset (below title bar if present).
+    /// Panels provide a consistent look for UI containers. For panels with
+    /// titles, use [`Self::panel_titled`].
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - X position of top-left corner
+    /// * `y` - Y position of top-left corner
+    /// * `w` - Panel width
+    /// * `h` - Panel height
+    ///
+    /// # Returns
+    ///
+    /// The Y coordinate where content should begin (same as `y` for titleless panels).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let content_y = frame.panel(10.0, 10.0, 200.0, 150.0);
+    /// frame.text(20.0, content_y + 10.0, "Panel content here");
+    /// ```
     pub fn panel(&mut self, x: f32, y: f32, w: f32, h: f32) -> f32 {
         self.draw.panel(x, y, w, h).draw(self.assets);
         y
     }
 
-    /// Draw a panel with a title bar.
+    /// Draw a UI panel with a title bar.
     ///
-    /// Returns the content area y-offset (below the title bar).
+    /// The title bar uses the default font and has a distinct background color.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no default font was set during setup.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - X position of top-left corner
+    /// * `y` - Y position of top-left corner
+    /// * `w` - Panel width
+    /// * `h` - Total panel height (including title bar)
+    /// * `title` - Title text to display
+    ///
+    /// # Returns
+    ///
+    /// The Y coordinate where content should begin (below the title bar, ~22px offset).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let content_y = frame.panel_titled(10.0, 10.0, 250.0, 200.0, "Inventory");
+    /// frame.text(20.0, content_y + 10.0, "Sword x1");
+    /// frame.text(20.0, content_y + 30.0, "Potion x3");
+    /// ```
     pub fn panel_titled(&mut self, x: f32, y: f32, w: f32, h: f32, title: &str) -> f32 {
         let font = self
             .default_font
@@ -395,9 +1091,29 @@ impl Frame<'_> {
         y + 22.0 // Title bar height
     }
 
-    /// Draw a 3D mesh at the given transform with the specified color.
+    // ========================================================================
+    // 3D Mesh Rendering
+    // ========================================================================
+
+    /// Draw a 3D mesh with the given transform and color.
     ///
-    /// Requires `ctx.enable_mesh_rendering()` to be called during setup.
+    /// The mesh is queued for rendering and will appear in the 3D scene.
+    /// Requires [`SetupContext::enable_mesh_rendering`] to be called during setup.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `transform` - Position, rotation, and scale of the mesh
+    /// * `color` - Solid color for the mesh
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Spinning red cube
+    /// let transform = Transform::translation(0.0, 0.0, -5.0)
+    ///     .rotate_y(frame.time * 0.5);
+    /// frame.draw_mesh(cube, transform, Color::RED);
+    /// ```
     pub fn draw_mesh(&mut self, mesh_index: usize, transform: Transform, color: Color) {
         self.mesh_queue
             .borrow_mut()
@@ -405,14 +1121,38 @@ impl Frame<'_> {
     }
 
     /// Draw a 3D mesh with default white color.
+    ///
+    /// Convenience method equivalent to `draw_mesh(mesh, transform, Color::WHITE)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `transform` - Position, rotation, and scale of the mesh
     pub fn draw_mesh_white(&mut self, mesh_index: usize, transform: Transform) {
         self.draw_mesh(mesh_index, transform, Color::WHITE);
     }
 
-    /// Draw a textured 3D mesh at the given transform with the specified color tint.
+    /// Draw a textured 3D mesh with a color tint.
     ///
-    /// The color acts as a tint/multiplier for the texture color.
-    /// Use `Color::WHITE` for no tinting.
+    /// The texture is sampled and multiplied by the color. Use `Color::WHITE`
+    /// for no tinting (show texture as-is).
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `transform` - Position, rotation, and scale of the mesh
+    /// * `color` - Tint color (multiplied with texture)
+    /// * `texture_index` - Index returned by `SetupContext::texture_*` or `add_texture`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Textured cube with red tint
+    /// frame.draw_mesh_textured(cube, transform, Color::RED, brick_texture);
+    ///
+    /// // Textured cube with no tint
+    /// frame.draw_mesh_textured(cube, transform, Color::WHITE, brick_texture);
+    /// ```
     pub fn draw_mesh_textured(
         &mut self,
         mesh_index: usize,
@@ -425,7 +1165,15 @@ impl Frame<'_> {
             .draw_textured(mesh_index, transform, color, texture_index);
     }
 
-    /// Draw a textured 3D mesh with default white color (no tint).
+    /// Draw a textured 3D mesh with no color tint.
+    ///
+    /// Convenience method equivalent to `draw_mesh_textured(mesh, transform, Color::WHITE, texture)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `transform` - Position, rotation, and scale of the mesh
+    /// * `texture_index` - Index returned by `SetupContext::texture_*` or `add_texture`
     pub fn draw_mesh_textured_white(
         &mut self,
         mesh_index: usize,
@@ -436,28 +1184,92 @@ impl Frame<'_> {
     }
 
     // ========================================================================
-    // Sprite methods (2D layer)
+    // 2D Sprite Rendering
     // ========================================================================
 
-    /// Draw a 2D sprite at the given position (native size).
+    /// Draw a 2D sprite at its native size.
     ///
-    /// The sprite is drawn at its original pixel dimensions.
-    /// Use `sprite_scaled` for custom sizing.
+    /// The sprite is rendered at its original pixel dimensions. Use
+    /// [`Self::sprite_scaled`] to draw at a different size.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID returned by `SetupContext::sprite_*` or `add_sprite`
+    /// * `x` - X position of top-left corner in screen pixels
+    /// * `y` - Y position of top-left corner in screen pixels
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Draw player sprite at its natural size
+    /// frame.sprite(player_sprite, player_x, player_y);
+    /// ```
     pub fn sprite(&mut self, sprite_id: SpriteId, x: f32, y: f32) {
         self.draw.sprite(sprite_id, x, y, Color::WHITE);
     }
 
     /// Draw a 2D sprite with a color tint.
+    ///
+    /// The tint color is multiplied with the sprite's pixels. Use this for
+    /// damage flashes, team colors, or fading effects.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID returned by `SetupContext::sprite_*` or `add_sprite`
+    /// * `x` - X position of top-left corner in screen pixels
+    /// * `y` - Y position of top-left corner in screen pixels
+    /// * `tint` - Color to multiply with sprite pixels
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Flash red when damaged
+    /// let tint = if is_damaged { Color::RED } else { Color::WHITE };
+    /// frame.sprite_tinted(player_sprite, x, y, tint);
+    ///
+    /// // Fade out (50% opacity)
+    /// frame.sprite_tinted(sprite, x, y, Color::rgba(1.0, 1.0, 1.0, 0.5));
+    /// ```
     pub fn sprite_tinted(&mut self, sprite_id: SpriteId, x: f32, y: f32, tint: Color) {
         self.draw.sprite(sprite_id, x, y, tint);
     }
 
     /// Draw a 2D sprite scaled to fit a rectangle.
+    ///
+    /// The sprite is stretched or shrunk to exactly fill the specified dimensions.
+    /// For pixel art, consider using nearest-neighbor filtered sprites
+    /// (loaded via `sprite_from_file_nearest`) to preserve crisp edges.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID returned by `SetupContext::sprite_*` or `add_sprite`
+    /// * `x` - X position of top-left corner
+    /// * `y` - Y position of top-left corner
+    /// * `w` - Desired width in pixels
+    /// * `h` - Desired height in pixels
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Scale 16x16 pixel art to 64x64
+    /// frame.sprite_scaled(character, x, y, 64.0, 64.0);
+    /// ```
     pub fn sprite_scaled(&mut self, sprite_id: SpriteId, x: f32, y: f32, w: f32, h: f32) {
         self.draw.sprite_scaled(sprite_id, x, y, w, h, Color::WHITE);
     }
 
     /// Draw a 2D sprite scaled with a color tint.
+    ///
+    /// Combines scaling and tinting in a single call.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID returned by `SetupContext::sprite_*` or `add_sprite`
+    /// * `x` - X position of top-left corner
+    /// * `y` - Y position of top-left corner
+    /// * `w` - Desired width in pixels
+    /// * `h` - Desired height in pixels
+    /// * `tint` - Color to multiply with sprite pixels
     pub fn sprite_scaled_tinted(
         &mut self,
         sprite_id: SpriteId,
@@ -470,9 +1282,28 @@ impl Frame<'_> {
         self.draw.sprite_scaled(sprite_id, x, y, w, h, tint);
     }
 
-    /// Draw a sub-region of a sprite (for sprite sheets).
+    /// Draw a sub-region of a sprite (for sprite sheets/atlases).
     ///
-    /// `src_x`, `src_y`, `src_w`, `src_h` define the source rectangle in pixels.
+    /// This allows drawing individual frames from a sprite sheet by specifying
+    /// a source rectangle within the sprite texture.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID of the sprite sheet
+    /// * `x`, `y` - Destination position on screen
+    /// * `w`, `h` - Destination size on screen
+    /// * `src_x`, `src_y` - Source rectangle position within the sprite (in pixels)
+    /// * `src_w`, `src_h` - Source rectangle size (in pixels)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Draw frame 3 from a 16x16 sprite sheet (4 columns)
+    /// let frame_idx = 3;
+    /// let src_x = (frame_idx % 4) as f32 * 16.0;
+    /// let src_y = (frame_idx / 4) as f32 * 16.0;
+    /// frame.sprite_region(sheet, x, y, 32.0, 32.0, src_x, src_y, 16.0, 16.0);
+    /// ```
     pub fn sprite_region(
         &mut self,
         sprite_id: SpriteId,
@@ -500,6 +1331,17 @@ impl Frame<'_> {
     }
 
     /// Draw a sub-region of a sprite with a color tint.
+    ///
+    /// Combines sprite sheet support with color tinting.
+    ///
+    /// # Arguments
+    ///
+    /// * `sprite_id` - ID of the sprite sheet
+    /// * `x`, `y` - Destination position on screen
+    /// * `w`, `h` - Destination size on screen
+    /// * `src_x`, `src_y` - Source rectangle position within the sprite
+    /// * `src_w`, `src_h` - Source rectangle size
+    /// * `tint` - Color to multiply with sprite pixels
     pub fn sprite_region_tinted(
         &mut self,
         sprite_id: SpriteId,
@@ -518,14 +1360,40 @@ impl Frame<'_> {
     }
 }
 
-/// Configuration for the app window.
+/// Configuration options for creating a Hoplite application window.
+///
+/// Use this struct with [`run_with_config`] to customize the window title
+/// and initial dimensions. For default settings (800x600 window titled "Hoplite"),
+/// use [`run`] instead.
+///
+/// # Example
+///
+/// ```ignore
+/// use hoplite::app::{run_with_config, AppConfig};
+///
+/// run_with_config(
+///     AppConfig::new()
+///         .title("My Game")
+///         .size(1280, 720),
+///     |ctx| {
+///         // setup...
+///         move |frame| {
+///             // frame loop...
+///         }
+///     }
+/// );
+/// ```
 pub struct AppConfig {
+    /// Window title displayed in the title bar.
     pub title: String,
+    /// Initial window width in pixels.
     pub width: u32,
+    /// Initial window height in pixels.
     pub height: u32,
 }
 
 impl Default for AppConfig {
+    /// Create default configuration: 800x600 window titled "Hoplite".
     fn default() -> Self {
         Self {
             title: "Hoplite".to_string(),
@@ -536,15 +1404,44 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Create a new configuration with default values.
+    ///
+    /// Equivalent to [`AppConfig::default()`].
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the window title.
+    ///
+    /// # Arguments
+    ///
+    /// * `title` - Any type that can be converted to `String`
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppConfig::new().title("Space Invaders")
+    /// ```
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
+    /// Set the initial window dimensions.
+    ///
+    /// The window may be resized by the user after creation. Use `Frame::width()`
+    /// and `Frame::height()` to get the current dimensions during rendering.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Window width in pixels
+    /// * `height` - Window height in pixels
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppConfig::new().size(1920, 1080)  // Full HD
+    /// ```
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = width;
         self.height = height;
@@ -552,18 +1449,48 @@ impl AppConfig {
     }
 }
 
-/// Run a Hoplite application with setup and frame closures.
+/// Run a Hoplite application with default configuration.
+///
+/// This is the main entry point for most Hoplite applications. It creates a
+/// window (800x600, titled "Hoplite"), initializes the GPU, and runs your
+/// setup and frame closures.
+///
+/// For custom window configuration, use [`run_with_config`] instead.
+///
+/// # Type Parameters
+///
+/// * `S` - Setup closure type: `FnOnce(&mut SetupContext) -> F`
+/// * `F` - Frame closure type: `FnMut(&mut Frame)`
+///
+/// # Arguments
+///
+/// * `setup` - A closure that receives a [`SetupContext`] for initialization
+///   and returns a frame closure. The frame closure is called every frame.
+///
+/// # Panics
+///
+/// Panics if:
+/// - The GPU cannot be initialized (no compatible adapter found)
+/// - The window cannot be created
+/// - Event loop creation fails
 ///
 /// # Example
-/// ```ignore
-/// hoplite::run(|ctx| {
-///     ctx.default_font(16.0);
-///     ctx.effect_world(include_str!("shader.wgsl"));
 ///
-///     move |frame| {
-///         frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
-///     }
-/// });
+/// ```ignore
+/// use hoplite::app::run;
+///
+/// fn main() {
+///     run(|ctx| {
+///         // Setup phase: load resources, configure pipeline
+///         ctx.default_font(16.0);
+///         ctx.effect_world(include_str!("background.wgsl"));
+///
+///         // Return the frame closure (called every frame)
+///         move |frame| {
+///             frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+///         }
+///     });
+/// }
 /// ```
 pub fn run<S, F>(setup: S)
 where
@@ -573,22 +1500,46 @@ where
     run_with_config(AppConfig::default(), setup);
 }
 
-/// Run a Hoplite application with custom configuration.
+/// Run a Hoplite application with custom window configuration.
+///
+/// Like [`run`], but allows specifying window title and dimensions.
+///
+/// # Type Parameters
+///
+/// * `S` - Setup closure type: `FnOnce(&mut SetupContext) -> F`
+/// * `F` - Frame closure type: `FnMut(&mut Frame)`
+///
+/// # Arguments
+///
+/// * `config` - Window configuration (title, size)
+/// * `setup` - A closure that receives a [`SetupContext`] for initialization
+///   and returns a frame closure
+///
+/// # Panics
+///
+/// Same conditions as [`run`].
 ///
 /// # Example
-/// ```ignore
-/// hoplite::run_with_config(
-///     AppConfig::new().title("Black Hole").size(1280, 720),
-///     |ctx| {
-///         ctx.default_font(16.0);
-///         ctx.effect_world(include_str!("scene.wgsl"))
-///            .post_process_world(include_str!("lensing.wgsl"));
 ///
-///         move |frame| {
-///             frame.text(10.0, 10.0, "Hello!");
+/// ```ignore
+/// use hoplite::app::{run_with_config, AppConfig};
+///
+/// fn main() {
+///     run_with_config(
+///         AppConfig::new()
+///             .title("Black Hole Simulator")
+///             .size(1280, 720),
+///         |ctx| {
+///             ctx.default_font(16.0);
+///             ctx.effect_world(include_str!("scene.wgsl"))
+///                .post_process_world(include_str!("lensing.wgsl"));
+///
+///             move |frame| {
+///                 frame.text(10.0, 10.0, "Hello!");
+///             }
 ///         }
-///     }
-/// );
+///     );
+/// }
 /// ```
 pub fn run_with_config<S, F>(config: AppConfig, setup: S)
 where
@@ -626,6 +1577,12 @@ where
     event_loop.run_app(&mut app).unwrap();
 }
 
+/// Type alias for the internal setup function.
+///
+/// This boxed closure is created from the user's setup closure and handles
+/// the actual initialization when the window becomes available. It receives
+/// the GPU context and mutable references to assets and 2D drawing context,
+/// and returns the frame closure along with optional default font and render graph.
 type SetupFn = Box<
     dyn FnOnce(
         &GpuContext,
@@ -639,28 +1596,66 @@ type SetupFn = Box<
     ),
 >;
 
+/// Internal application state machine.
+///
+/// The Hoplite application lifecycle has two states:
+///
+/// - **Pending**: Initial state before the window is created. Holds the
+///   configuration and setup closure.
+/// - **Running**: Active state after initialization. Holds all runtime
+///   resources and the frame closure.
+///
+/// The transition from `Pending` to `Running` happens in the [`ApplicationHandler::resumed`]
+/// callback when the window system is ready.
 enum HopliteApp {
+    /// Application is waiting for window creation.
     Pending {
+        /// Window configuration (title, size).
         config: AppConfig,
+        /// User's setup closure (consumed during initialization).
         setup: Option<SetupFn>,
     },
+    /// Application is running the main loop.
     Running {
+        /// Native window handle (Arc for sharing with wgpu surface).
         window: Arc<Window>,
+        /// GPU context containing device, queue, and surface.
         gpu: GpuContext,
+        /// Loaded fonts and other managed assets.
         assets: Assets,
+        /// 2D rendering state (batched draw calls).
         draw_2d: Draw2d,
+        /// 3D camera state.
         camera: Camera,
+        /// Input state (keyboard, mouse).
         input: Input,
+        /// User's frame closure (called every frame).
         frame_fn: Box<dyn FnMut(&mut Frame)>,
+        /// Default font ID if one was set during setup.
         default_font: Option<FontId>,
+        /// Optional render graph for shader effects and 3D rendering.
         render_graph: Option<RenderGraph>,
+        /// Shared queue of mesh draw calls for the current frame.
         mesh_queue: Rc<RefCell<MeshQueue>>,
+        /// Time when the application started (for `Frame::time`).
         start_time: Instant,
+        /// Time of the last frame (for `Frame::dt` calculation).
         last_frame: Instant,
     },
 }
 
+/// Implementation of winit's [`ApplicationHandler`] trait for the Hoplite app.
+///
+/// This handles the window lifecycle events and implements the main render loop.
 impl ApplicationHandler for HopliteApp {
+    /// Called when the application is resumed (window becomes available).
+    ///
+    /// On first call, this transitions from `Pending` to `Running` by:
+    /// 1. Creating the window with the configured attributes
+    /// 2. Initializing the GPU context
+    /// 3. Creating asset and 2D drawing systems
+    /// 4. Running the user's setup closure
+    /// 5. Transitioning to the `Running` state
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let HopliteApp::Pending { config, setup } = self {
             let window_attrs = WindowAttributes::default()
@@ -672,9 +1667,10 @@ impl ApplicationHandler for HopliteApp {
             let mut assets = Assets::new(&gpu);
             let mut draw_2d = Draw2d::new(&gpu);
 
-            // Create shared mesh queue
+            // Create shared mesh queue for 3D rendering
             let mesh_queue = Rc::new(RefCell::new(MeshQueue::new()));
 
+            // Run user's setup closure to get the frame function
             let setup_fn = setup.take().unwrap();
             let (frame_fn, default_font, render_graph) =
                 setup_fn(&gpu, &mut assets, &mut draw_2d, &mesh_queue);
@@ -696,6 +1692,14 @@ impl ApplicationHandler for HopliteApp {
         }
     }
 
+    /// Handle window events (input, resize, close, redraw).
+    ///
+    /// The main render loop happens in `RedrawRequested`:
+    /// 1. Calculate frame timing (dt, elapsed time)
+    /// 2. Clear 2D and mesh state from previous frame
+    /// 3. Create a [`Frame`] context and call the user's frame closure
+    /// 4. Execute the render graph (or fallback to 2D-only rendering)
+    /// 5. Request the next frame
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let HopliteApp::Running {
             window,
@@ -771,19 +1775,36 @@ impl ApplicationHandler for HopliteApp {
     }
 }
 
-/// Render only 2D content when no render graph is configured.
+/// Fallback renderer for applications without a render graph.
+///
+/// When no shader effects or 3D rendering are configured, this function
+/// provides a simple path to render 2D content directly to the screen.
+/// It clears the screen to black and renders all 2D draw calls (text,
+/// rectangles, sprites).
+///
+/// This is used internally when the user doesn't call any effect/post-process
+/// methods during setup.
+///
+/// # Arguments
+///
+/// * `gpu` - GPU context for accessing device, queue, and surface
+/// * `draw_2d` - 2D drawing context with batched draw calls
+/// * `assets` - Asset manager (needed for font textures)
 fn render_2d_only(gpu: &GpuContext, draw_2d: &Draw2d, assets: &Assets) {
+    // Get the next frame's texture to render to
     let output = gpu.surface.get_current_texture().unwrap();
     let view = output
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
 
+    // Create command encoder for this frame
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("2D Only Encoder"),
         });
 
+    // Begin render pass: clear to black, then render 2D content
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("2D Only Pass"),
@@ -801,9 +1822,11 @@ fn render_2d_only(gpu: &GpuContext, draw_2d: &Draw2d, assets: &Assets) {
             occlusion_query_set: None,
         });
 
+        // Render all batched 2D draw calls
         draw_2d.render(gpu, &mut render_pass, assets);
     }
 
+    // Submit commands and present the frame
     gpu.queue.submit(std::iter::once(encoder.finish()));
     output.present();
 }
