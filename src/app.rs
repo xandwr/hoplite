@@ -203,19 +203,19 @@ impl<'a> SetupContext<'a> {
 
     /// Create a procedural Minecraft-style noise texture and return its index.
     pub fn texture_minecraft_noise(&mut self, size: u32, seed: u32) -> usize {
-        let texture = Texture::minecraft_noise(self.gpu, size, seed);
+        let texture = Texture::blocky_noise(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
     /// Create a procedural Minecraft-style grass texture and return its index.
     pub fn texture_minecraft_grass(&mut self, size: u32, seed: u32) -> usize {
-        let texture = Texture::minecraft_grass(self.gpu, size, seed);
+        let texture = Texture::blocky_grass(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
     /// Create a procedural Minecraft-style cobblestone texture and return its index.
     pub fn texture_minecraft_cobblestone(&mut self, size: u32, seed: u32) -> usize {
-        let texture = Texture::minecraft_cobblestone(self.gpu, size, seed);
+        let texture = Texture::blocky_stone(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
