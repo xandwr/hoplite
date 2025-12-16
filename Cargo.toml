@@ -9,3 +9,7 @@ hecs = "0.10.5"
 pollster = "0.4.0"
 wgpu = "27.0.1"
 winit = "0.30.12"
+
+[[example]]
+name = "black_hole"
+path = "examples/black_hole.rs"
