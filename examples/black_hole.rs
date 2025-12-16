@@ -1,5 +1,5 @@
 use hoplite::{
-    AppConfig, Color, EffectNode, EffectPass, OrbitCamera, OrbitMode, RenderGraph,
+    AppConfig, Color, EffectNode, EffectPass, OrbitCamera, OrbitMode, RenderGraph, Vec3,
     WorldPostProcessNode, WorldPostProcessPass, run_with_config,
 };
 
@@ -23,7 +23,7 @@ fn main() {
         // Auto-rotate mode: slowly orbit around the black hole
         // Switch to OrbitMode::Interactive for mouse control
         let mut orbit = OrbitCamera::new()
-            .target(0.0, 0.0, 0.0)
+            .target(Vec3::ZERO)
             .distance(32.0)
             .elevation(0.3)
             .fov(80.0)

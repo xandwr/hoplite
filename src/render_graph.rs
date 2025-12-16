@@ -2,7 +2,6 @@ use crate::camera::Camera;
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
-use crate::ui::UiPass;
 
 /// A render target that can be written to by passes.
 pub struct RenderTarget {
@@ -207,54 +206,6 @@ impl RenderNode for WorldPostProcessNode {
 
         self.pass
             .render(ctx.gpu, &mut render_pass, ctx.time, ctx.camera, input_view);
-    }
-}
-
-/// A UI overlay node that renders on top without clearing.
-///
-/// This node should be placed last in the render graph to ensure
-/// UI elements appear on top of all scene content, unaffected by
-/// post-processing effects.
-pub struct UiNode {
-    pub pass: UiPass,
-}
-
-impl UiNode {
-    pub fn new(pass: UiPass) -> Self {
-        Self { pass }
-    }
-
-    /// Get mutable access to the UI pass for adding components.
-    pub fn ui(&mut self) -> &mut UiPass {
-        &mut self.pass
-    }
-}
-
-impl RenderNode for UiNode {
-    fn execute(
-        &self,
-        ctx: &mut RenderContext,
-        target: &wgpu::TextureView,
-        _input: Option<&wgpu::TextureView>,
-    ) {
-        // Load (don't clear) to composite on top of existing content
-        let mut render_pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("UI Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
-        self.pass.render(ctx.gpu, &mut render_pass);
     }
 }
 

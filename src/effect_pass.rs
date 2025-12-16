@@ -200,13 +200,13 @@ impl EffectPass {
             resolution: [gpu.width() as f32, gpu.height() as f32],
             time,
             fov: camera.fov,
-            camera_pos: camera.position,
+            camera_pos: camera.position.to_array(),
             _pad1: 0.0,
-            camera_forward: camera.forward,
+            camera_forward: camera.forward.to_array(),
             _pad2: 0.0,
-            camera_right: camera.right(),
+            camera_right: camera.right().to_array(),
             _pad3: 0.0,
-            camera_up: camera.orthogonal_up(),
+            camera_up: camera.orthogonal_up().to_array(),
             aspect: gpu.aspect(),
         };
         gpu.queue

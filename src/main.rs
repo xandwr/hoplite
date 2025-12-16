@@ -5,7 +5,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use hoplite::{Camera, EffectPass, GpuContext};
+use hoplite::{Camera, EffectPass, GpuContext, Vec3};
 
 struct App {
     window: Option<Arc<Window>>,
@@ -22,8 +22,8 @@ impl Default for App {
             gpu: None,
             effect: None,
             camera: Camera::new()
-                .at(0.0, 0.0, 3.0)
-                .looking_at(0.0, 0.0, 0.0)
+                .at(Vec3::new(0.0, 0.0, 3.0))
+                .looking_at(Vec3::ZERO)
                 .with_fov(90.0),
             start_time: Instant::now(),
         }
@@ -63,8 +63,8 @@ impl ApplicationHandler for App {
                     let time = self.start_time.elapsed().as_secs_f32();
 
                     // Orbit camera around the sphere
-                    self.camera.position = [3.0 * time.cos(), 1.0, 3.0 * time.sin()];
-                    self.camera = self.camera.looking_at(0.0, 0.0, 0.0);
+                    self.camera.position = Vec3::new(3.0 * time.cos(), 1.0, 3.0 * time.sin());
+                    self.camera = self.camera.looking_at(Vec3::ZERO);
 
                     let output = gpu.surface.get_current_texture().unwrap();
                     let view = output

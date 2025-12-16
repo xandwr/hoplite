@@ -1,6 +1,53 @@
 use crate::assets::{Assets, FontId};
 use crate::gpu::GpuContext;
-use crate::ui::Color;
+
+/// A rectangle in screen-space pixel coordinates.
+#[derive(Clone, Copy, Debug)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rect {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+/// RGBA color with premultiplied alpha.
+#[derive(Clone, Copy, Debug)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+impl Color {
+    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a }
+    }
+
+    pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
+        Self { r, g, b, a: 1.0 }
+    }
+
+    pub const WHITE: Color = Color::rgba(1.0, 1.0, 1.0, 1.0);
+    pub const BLACK: Color = Color::rgba(0.0, 0.0, 0.0, 1.0);
+    pub const TRANSPARENT: Color = Color::rgba(0.0, 0.0, 0.0, 0.0);
+
+    /// Semi-transparent dark background for debug panels.
+    pub const DEBUG_BG: Color = Color::rgba(0.1, 0.1, 0.1, 0.85);
+    /// Accent color for borders.
+    pub const DEBUG_BORDER: Color = Color::rgba(0.4, 0.4, 0.4, 1.0);
+}
 
 /// Vertex for 2D sprite/text rendering.
 #[repr(C)]
@@ -379,6 +426,24 @@ impl Draw2d {
         }
     }
 
+    /// Draw a bordered panel with optional title bar.
+    ///
+    /// This is a convenience method for drawing debug overlays and UI panels.
+    /// For more control, use the individual `rect()` and `text()` methods.
+    pub fn panel(&mut self, x: f32, y: f32, width: f32, height: f32) -> PanelBuilder<'_> {
+        PanelBuilder {
+            draw2d: self,
+            x,
+            y,
+            width,
+            height,
+            background: Color::DEBUG_BG,
+            border: Some(Color::DEBUG_BORDER),
+            title: None,
+            title_font: None,
+        }
+    }
+
     /// Ensure we have bind groups for all loaded fonts.
     pub(crate) fn update_font_bind_groups(&mut self, gpu: &GpuContext, assets: &Assets) {
         // Grow the bind group cache if needed
@@ -460,6 +525,97 @@ impl Draw2d {
             render_pass.draw(offset as u32..(offset + vertices.len()) as u32, 0..1);
 
             offset += vertices.len();
+        }
+    }
+}
+
+/// Builder for drawing panels with backgrounds, borders, and titles.
+pub struct PanelBuilder<'a> {
+    draw2d: &'a mut Draw2d,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    background: Color,
+    border: Option<Color>,
+    title: Option<String>,
+    title_font: Option<FontId>,
+}
+
+impl<'a> PanelBuilder<'a> {
+    /// Set the background color.
+    pub fn background(mut self, color: Color) -> Self {
+        self.background = color;
+        self
+    }
+
+    /// Set the border color.
+    pub fn border(mut self, color: Color) -> Self {
+        self.border = Some(color);
+        self
+    }
+
+    /// Remove the border.
+    pub fn no_border(mut self) -> Self {
+        self.border = None;
+        self
+    }
+
+    /// Add a title bar with the given text and font.
+    pub fn title(mut self, text: impl Into<String>, font: FontId) -> Self {
+        self.title = Some(text.into());
+        self.title_font = Some(font);
+        self
+    }
+
+    /// Draw the panel. Call this to finalize and render the panel.
+    pub fn draw(self, assets: &Assets) {
+        let border_width = 1.0;
+        let title_height = 22.0;
+
+        // Draw background
+        self.draw2d
+            .rect(self.x, self.y, self.width, self.height, self.background);
+
+        // Draw border if present
+        if let Some(border_color) = self.border {
+            // Top
+            self.draw2d
+                .rect(self.x, self.y, self.width, border_width, border_color);
+            // Bottom
+            self.draw2d.rect(
+                self.x,
+                self.y + self.height - border_width,
+                self.width,
+                border_width,
+                border_color,
+            );
+            // Left
+            self.draw2d
+                .rect(self.x, self.y, border_width, self.height, border_color);
+            // Right
+            self.draw2d.rect(
+                self.x + self.width - border_width,
+                self.y,
+                border_width,
+                self.height,
+                border_color,
+            );
+        }
+
+        // Draw title bar if present
+        if let (Some(title_text), Some(font_id)) = (&self.title, self.title_font) {
+            let title_bg = Color::rgba(0.15, 0.15, 0.15, 0.95);
+            self.draw2d
+                .rect(self.x, self.y, self.width, title_height, title_bg);
+            self.draw2d.text(
+                assets,
+                font_id,
+                self.x + 8.0,
+                self.y + 4.0,
+                title_text,
+                Color::WHITE,
+            );
         }
     }
 }

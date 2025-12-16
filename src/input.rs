@@ -1,9 +1,10 @@
 use std::collections::HashSet;
+
+use glam::Vec2;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// Tracks input state for keyboard and mouse.
-#[derive(Default)]
 pub struct Input {
     keys_down: HashSet<KeyCode>,
     keys_pressed: HashSet<KeyCode>,
@@ -11,9 +12,25 @@ pub struct Input {
     mouse_buttons_down: HashSet<MouseButton>,
     mouse_buttons_pressed: HashSet<MouseButton>,
     mouse_buttons_released: HashSet<MouseButton>,
-    mouse_position: [f32; 2],
-    mouse_delta: [f32; 2],
-    scroll_delta: [f32; 2],
+    mouse_position: Vec2,
+    mouse_delta: Vec2,
+    scroll_delta: Vec2,
+}
+
+impl Default for Input {
+    fn default() -> Self {
+        Self {
+            keys_down: HashSet::new(),
+            keys_pressed: HashSet::new(),
+            keys_released: HashSet::new(),
+            mouse_buttons_down: HashSet::new(),
+            mouse_buttons_pressed: HashSet::new(),
+            mouse_buttons_released: HashSet::new(),
+            mouse_position: Vec2::ZERO,
+            mouse_delta: Vec2::ZERO,
+            scroll_delta: Vec2::ZERO,
+        }
+    }
 }
 
 impl Input {
@@ -27,8 +44,8 @@ impl Input {
         self.keys_released.clear();
         self.mouse_buttons_pressed.clear();
         self.mouse_buttons_released.clear();
-        self.mouse_delta = [0.0, 0.0];
-        self.scroll_delta = [0.0, 0.0];
+        self.mouse_delta = Vec2::ZERO;
+        self.scroll_delta = Vec2::ZERO;
     }
 
     /// Process a window event and update input state.
@@ -63,20 +80,18 @@ impl Input {
                 }
             },
             WindowEvent::CursorMoved { position, .. } => {
-                let new_pos = [position.x as f32, position.y as f32];
-                self.mouse_delta[0] += new_pos[0] - self.mouse_position[0];
-                self.mouse_delta[1] += new_pos[1] - self.mouse_position[1];
+                let new_pos = Vec2::new(position.x as f32, position.y as f32);
+                self.mouse_delta += new_pos - self.mouse_position;
                 self.mouse_position = new_pos;
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (*x, *y),
+                let d = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => Vec2::new(*x, *y),
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        (pos.x as f32 / 120.0, pos.y as f32 / 120.0)
+                        Vec2::new(pos.x as f32, pos.y as f32) / 120.0
                     }
                 };
-                self.scroll_delta[0] += dx;
-                self.scroll_delta[1] += dy;
+                self.scroll_delta += d;
             }
             _ => {}
         }
@@ -113,17 +128,17 @@ impl Input {
     }
 
     /// Current mouse position in window coordinates.
-    pub fn mouse_position(&self) -> [f32; 2] {
+    pub fn mouse_position(&self) -> Vec2 {
         self.mouse_position
     }
 
     /// Mouse movement delta this frame.
-    pub fn mouse_delta(&self) -> [f32; 2] {
+    pub fn mouse_delta(&self) -> Vec2 {
         self.mouse_delta
     }
 
     /// Scroll wheel delta this frame (in "lines").
-    pub fn scroll_delta(&self) -> [f32; 2] {
+    pub fn scroll_delta(&self) -> Vec2 {
         self.scroll_delta
     }
 }
