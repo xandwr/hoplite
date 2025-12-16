@@ -1,3 +1,34 @@
+//! # Hoplite
+//!
+//! **A creative coding framework for Rust that gets out of your way.**
+//!
+//! Write shaders, render 3D scenes, and build visualizations with a single closure.
+//! No boilerplate, no ceremony—just code for the screen.
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use hoplite::*;
+//!
+//! fn main() {
+//!     run(|ctx| {
+//!         ctx.default_font(16.0);
+//!
+//!         move |frame| {
+//!             frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
+//!         }
+//!     });
+//! }
+//! ```
+//!
+//! ## Philosophy
+//!
+//! - **One closure, one call** — Setup and frame logic live in closures. No traits to implement.
+//! - **Hot reload everything** — Edit WGSL shaders and watch them update instantly.
+//! - **Escape hatches everywhere** — Start simple, access the full wgpu API when needed.
+//!
+//! See the [repository](https://github.com/xandwr/hoplite) for full documentation and examples.
+
 mod app;
 mod assets;
 mod camera;
