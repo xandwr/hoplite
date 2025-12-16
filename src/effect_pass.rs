@@ -1,39 +1,173 @@
+//! Fullscreen shader effect passes for screen-space and world-space rendering.
+//!
+//! This module provides [`EffectPass`], a rendering primitive for fullscreen shader effects.
+//! It renders a single triangle that covers the entire screen, allowing custom fragment shaders
+//! to process every pixel.
+//!
+//! # Two Modes of Operation
+//!
+//! - **Screen-space** ([`EffectPass::new`]): Basic uniforms with resolution and time.
+//!   Suitable for 2D effects like color grading, vignettes, and procedural backgrounds.
+//!
+//! - **World-space** ([`EffectPass::new_world`]): Extended uniforms including camera
+//!   position and orientation. Suitable for raymarching, volumetric effects, and any
+//!   technique that needs to cast rays into 3D space.
+//!
+//! # Shader Requirements
+//!
+//! Your WGSL shader must define vertex and fragment entry points named `vs` and `fs`.
+//! The vertex shader should generate fullscreen triangle coordinates:
+//!
+//! ```wgsl
+//! @vertex
+//! fn vs(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {
+//!     let x = f32(i32(vertex_index) - 1);
+//!     let y = f32(i32(vertex_index & 1u) * 2 - 1);
+//!     return vec4f(x, y, 0.0, 1.0);
+//! }
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use hoplite::{GpuContext, EffectPass};
+//!
+//! let shader = r#"
+//!     struct Uniforms { resolution: vec2f, time: f32 }
+//!     @group(0) @binding(0) var<uniform> u: Uniforms;
+//!
+//!     @vertex
+//!     fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+//!         let x = f32(i32(vi) - 1);
+//!         let y = f32(i32(vi & 1u) * 2 - 1);
+//!         return vec4f(x, y, 0.0, 1.0);
+//!     }
+//!
+//!     @fragment
+//!     fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+//!         let uv = pos.xy / u.resolution;
+//!         return vec4f(uv, 0.5 + 0.5 * sin(u.time), 1.0);
+//!     }
+//! "#;
+//!
+//! let effect = EffectPass::new(&gpu, shader);
+//! effect.render(&gpu, &mut render_pass, time);
+//! ```
+
 use crate::camera::Camera;
 use crate::gpu::GpuContext;
 
-/// Standard uniforms available to all effect passes (screen-space).
+/// Standard uniforms available to all screen-space effect passes.
+///
+/// This struct is uploaded to the GPU each frame and bound at `@group(0) @binding(0)`.
+/// The layout matches WGSL struct alignment requirements (16-byte aligned).
+///
+/// # WGSL Declaration
+///
+/// ```wgsl
+/// struct Uniforms {
+///     resolution: vec2f,
+///     time: f32,
+/// }
+/// @group(0) @binding(0) var<uniform> u: Uniforms;
+/// ```
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ScreenUniforms {
+    /// Render target resolution in pixels `[width, height]`.
     pub resolution: [f32; 2],
+    /// Elapsed time in seconds since application start.
     pub time: f32,
+    /// Padding for 16-byte alignment.
     pub _padding: f32,
 }
 
-/// Extended uniforms for world-space effect passes (includes camera).
+/// Extended uniforms for world-space effect passes.
+///
+/// Includes all [`ScreenUniforms`] fields plus camera position, orientation vectors,
+/// field of view, and aspect ratio. This allows shaders to reconstruct world-space
+/// rays for raymarching, volumetric effects, and similar techniques.
+///
+/// # WGSL Declaration
+///
+/// ```wgsl
+/// struct Uniforms {
+///     resolution: vec2f,
+///     time: f32,
+///     fov: f32,
+///     camera_pos: vec3f,
+///     // Note: padding fields are implicit in WGSL
+///     camera_forward: vec3f,
+///     camera_right: vec3f,
+///     camera_up: vec3f,
+///     aspect: f32,
+/// }
+/// @group(0) @binding(0) var<uniform> u: Uniforms;
+/// ```
+///
+/// # Ray Construction
+///
+/// To cast a ray from the camera through a pixel:
+///
+/// ```wgsl
+/// let uv = (pos.xy / u.resolution) * 2.0 - 1.0;
+/// let ray_dir = normalize(
+///     u.camera_forward +
+///     uv.x * u.aspect * tan(u.fov * 0.5) * u.camera_right +
+///     uv.y * tan(u.fov * 0.5) * u.camera_up
+/// );
+/// ```
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WorldUniforms {
-    // Base uniforms
+    /// Render target resolution in pixels `[width, height]`.
     pub resolution: [f32; 2],
+    /// Elapsed time in seconds since application start.
     pub time: f32,
+    /// Vertical field of view in radians.
     pub fov: f32,
-    // Camera
+    /// Camera position in world space.
     pub camera_pos: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad1: f32,
+    /// Camera forward direction (normalized).
     pub camera_forward: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad2: f32,
+    /// Camera right direction (normalized).
     pub camera_right: [f32; 3],
+    /// Padding for 16-byte alignment.
     pub _pad3: f32,
+    /// Camera up direction (normalized, orthogonal to forward).
     pub camera_up: [f32; 3],
+    /// Aspect ratio (width / height).
     pub aspect: f32,
 }
 
-/// A full-screen shader effect pass.
+/// A fullscreen shader effect pass.
 ///
-/// Renders a full-screen triangle with a custom fragment shader.
-/// Can be used for screen-space effects (post-processing, UI backgrounds)
-/// or world-space effects (raymarching, black holes) when `.with_camera()` is called.
+/// Renders a fullscreen triangle with a custom fragment shader, providing a simple
+/// way to implement screen-space or world-space effects. The pass handles uniform
+/// buffer management, bind group creation, and pipeline setup.
+///
+/// # Modes
+///
+/// - **Screen-space** (via [`new`](Self::new)): Uses [`ScreenUniforms`] with resolution and time.
+/// - **World-space** (via [`new_world`](Self::new_world)): Uses [`WorldUniforms`] with full camera data.
+///
+/// # Example
+///
+/// ```no_run
+/// use hoplite::{GpuContext, EffectPass};
+///
+/// // Screen-space effect
+/// let vignette = EffectPass::new(&gpu, include_str!("shaders/vignette.wgsl"));
+/// vignette.render(&gpu, &mut render_pass, time);
+///
+/// // World-space effect (raymarching)
+/// let raymarch = EffectPass::new_world(&gpu, include_str!("shaders/raymarch.wgsl"));
+/// raymarch.render_with_camera(&gpu, &mut render_pass, time, &camera);
+/// ```
 pub struct EffectPass {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
@@ -44,38 +178,25 @@ pub struct EffectPass {
 impl EffectPass {
     /// Create a new screen-space effect pass from WGSL shader source.
     ///
-    /// The shader should define:
-    /// ```wgsl
-    /// struct Uniforms {
-    ///     resolution: vec2f,
-    ///     time: f32,
-    /// }
-    /// @group(0) @binding(0) var<uniform> u: Uniforms;
-    /// ```
+    /// The shader receives [`ScreenUniforms`] at `@group(0) @binding(0)` and must
+    /// define `vs` and `fs` entry points. Use [`render`](Self::render) to draw.
+    ///
+    /// See the [module documentation](self) for shader requirements.
     pub fn new(gpu: &GpuContext, shader_source: &str) -> Self {
         Self::create(gpu, shader_source, false)
     }
 
     /// Create a new world-space effect pass from WGSL shader source.
     ///
-    /// The shader should define:
-    /// ```wgsl
-    /// struct Uniforms {
-    ///     resolution: vec2f,
-    ///     time: f32,
-    ///     fov: f32,
-    ///     camera_pos: vec3f,
-    ///     camera_forward: vec3f,
-    ///     camera_right: vec3f,
-    ///     camera_up: vec3f,
-    ///     aspect: f32,
-    /// }
-    /// @group(0) @binding(0) var<uniform> u: Uniforms;
-    /// ```
+    /// The shader receives [`WorldUniforms`] at `@group(0) @binding(0)` and must
+    /// define `vs` and `fs` entry points. Use [`render_with_camera`](Self::render_with_camera) to draw.
+    ///
+    /// See [`WorldUniforms`] for the uniform layout and ray construction example.
     pub fn new_world(gpu: &GpuContext, shader_source: &str) -> Self {
         Self::create(gpu, shader_source, true)
     }
 
+    /// Internal constructor that creates the pipeline and resources.
     fn create(gpu: &GpuContext, shader_source: &str, uses_camera: bool) -> Self {
         let device = &gpu.device;
 
@@ -164,6 +285,13 @@ impl EffectPass {
     }
 
     /// Render a screen-space effect (no camera).
+    ///
+    /// Uploads [`ScreenUniforms`] and draws a fullscreen triangle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this effect was created with [`new_world`](Self::new_world).
+    /// Use [`render_with_camera`](Self::render_with_camera) for world-space effects.
     pub fn render(&self, gpu: &GpuContext, render_pass: &mut wgpu::RenderPass, time: f32) {
         assert!(
             !self.uses_camera,
@@ -184,6 +312,14 @@ impl EffectPass {
     }
 
     /// Render a world-space effect with camera data.
+    ///
+    /// Uploads [`WorldUniforms`] (including camera position and orientation) and draws
+    /// a fullscreen triangle. The shader can use this data to cast rays into the scene.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this effect was created with [`new`](Self::new).
+    /// Use [`render`](Self::render) for screen-space effects.
     pub fn render_with_camera(
         &self,
         gpu: &GpuContext,
@@ -218,6 +354,9 @@ impl EffectPass {
     }
 
     /// Returns whether this effect pass uses camera data.
+    ///
+    /// If `true`, use [`render_with_camera`](Self::render_with_camera).
+    /// If `false`, use [`render`](Self::render).
     pub fn uses_camera(&self) -> bool {
         self.uses_camera
     }
