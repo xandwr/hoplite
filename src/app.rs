@@ -5,19 +5,26 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+use crate::assets::Assets;
 use crate::camera::Camera;
+use crate::draw2d::Draw2d;
 use crate::gpu::GpuContext;
 use crate::input::Input;
 
 /// Context provided during app setup.
 pub struct SetupContext<'a> {
     pub gpu: &'a GpuContext,
+    pub assets: &'a mut Assets,
 }
 
 /// Context provided each frame for rendering.
 pub struct Frame<'a> {
     /// GPU context for rendering.
     pub gpu: &'a GpuContext,
+    /// Asset manager for loading fonts, textures, etc.
+    pub assets: &'a Assets,
+    /// 2D drawing API for sprites and text.
+    pub draw_2d: &'a mut Draw2d,
     /// Current camera state.
     pub camera: &'a mut Camera,
     /// Input state for this frame.
@@ -117,13 +124,15 @@ where
 
     let mut app = HopliteApp::Pending {
         config,
-        setup: Some(Box::new(move |gpu| Box::new(setup(SetupContext { gpu })))),
+        setup: Some(Box::new(move |gpu, assets| {
+            Box::new(setup(SetupContext { gpu, assets }))
+        })),
     };
 
     event_loop.run_app(&mut app).unwrap();
 }
 
-type SetupFn = Box<dyn FnOnce(&GpuContext) -> Box<dyn FnMut(Frame)>>;
+type SetupFn = Box<dyn FnOnce(&GpuContext, &mut Assets) -> Box<dyn FnMut(Frame)>>;
 
 enum HopliteApp {
     Pending {
@@ -133,6 +142,8 @@ enum HopliteApp {
     Running {
         window: Arc<Window>,
         gpu: GpuContext,
+        assets: Assets,
+        draw_2d: Draw2d,
         camera: Camera,
         input: Input,
         frame_fn: Box<dyn FnMut(Frame)>,
@@ -150,13 +161,17 @@ impl ApplicationHandler for HopliteApp {
 
             let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
             let gpu = GpuContext::new(window.clone());
+            let mut assets = Assets::new(&gpu);
+            let draw_2d = Draw2d::new(&gpu);
 
             let setup_fn = setup.take().unwrap();
-            let frame_fn = setup_fn(&gpu);
+            let frame_fn = setup_fn(&gpu, &mut assets);
 
             *self = HopliteApp::Running {
                 window,
                 gpu,
+                assets,
+                draw_2d,
                 camera: Camera::new(),
                 input: Input::new(),
                 frame_fn,
@@ -170,6 +185,8 @@ impl ApplicationHandler for HopliteApp {
         let HopliteApp::Running {
             window,
             gpu,
+            assets,
+            draw_2d,
             camera,
             input,
             frame_fn,
@@ -195,8 +212,14 @@ impl ApplicationHandler for HopliteApp {
                 let dt = now.duration_since(*last_frame).as_secs_f32();
                 *last_frame = now;
 
+                // Clear draw_2d for new frame and update font bind groups
+                draw_2d.clear();
+                draw_2d.update_font_bind_groups(gpu, assets);
+
                 let frame = Frame {
                     gpu,
+                    assets,
+                    draw_2d,
                     camera,
                     input,
                     time,
