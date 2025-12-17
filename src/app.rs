@@ -2080,7 +2080,7 @@ impl MeshBuilder<'_> {
     ///
     /// # Arguments
     ///
-    /// * `texture` - Texture handle from `ctx.texture_*` methods
+    /// * `texture` - Texture handle from `ctx.texture_*` or `ctx.add_texture()` methods
     pub fn texture(mut self, texture: TextureId) -> Self {
         self.texture = Some(texture);
         self

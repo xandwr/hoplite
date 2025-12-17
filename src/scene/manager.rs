@@ -559,6 +559,72 @@ impl SceneManager {
             manager: self,
         }
     }
+
+    /// Render a specific scene to a custom render target with a custom camera.
+    ///
+    /// This is used for scene projections (portals, windows, security cameras, etc.)
+    /// where you want to render one scene's output onto a surface in another scene.
+    ///
+    /// # Arguments
+    ///
+    /// * `scene_name` - Name of the scene to render
+    /// * `target` - Texture view to render into
+    /// * `camera` - Camera to use for rendering (independent of the scene's camera)
+    /// * `gpu` - GPU context
+    /// * `time` - Current time for animations
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Render exterior scene to a window texture in cockpit
+    /// manager.render_scene_to_target(
+    ///     "exterior",
+    ///     projection.texture_view(),
+    ///     &projection.camera,
+    ///     &gpu,
+    ///     time
+    /// );
+    /// ```
+    pub fn render_scene_to_target(
+        &mut self,
+        scene_name: &str,
+        target: &wgpu::TextureView,
+        camera: &Camera,
+        gpu: &GpuContext,
+        time: f32,
+    ) {
+        if let Some(scene) = self.scenes.get_mut(scene_name) {
+            if let Some(ref mut graph) = scene.render_graph {
+                // Render the scene's render graph to the custom target
+                graph.execute_to_target(gpu, time, camera, target);
+            } else {
+                // Fallback: just clear to black if no render graph
+                let mut encoder =
+                    gpu.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Scene Projection Clear"),
+                        });
+                {
+                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Projection Clear Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                }
+                gpu.queue.submit(std::iter::once(encoder.finish()));
+            }
+        }
+    }
 }
 
 impl Default for SceneManager {

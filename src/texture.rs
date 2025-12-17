@@ -74,6 +74,34 @@ pub struct Sprite {
 }
 
 impl Texture {
+    /// Create a texture from existing wgpu resources.
+    ///
+    /// This is used internally for render targets and projections where the texture
+    /// is created directly rather than loaded from data.
+    ///
+    /// # Arguments
+    ///
+    /// * `texture` - The underlying wgpu texture
+    /// * `view` - Texture view for shader binding
+    /// * `sampler` - Sampler defining filtering and addressing
+    /// * `width` - Texture width in pixels
+    /// * `height` - Texture height in pixels
+    pub(crate) fn from_wgpu_resources(
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+        sampler: wgpu::Sampler,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
+            texture,
+            view,
+            sampler,
+            width,
+            height,
+        }
+    }
+
     /// Create a texture from raw RGBA data.
     ///
     /// # Arguments

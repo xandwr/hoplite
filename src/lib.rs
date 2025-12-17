@@ -58,6 +58,7 @@ mod picking;
 mod post_process;
 mod render_graph;
 pub mod scene;
+mod scene_projection;
 mod texture;
 
 pub use app::{
@@ -82,6 +83,7 @@ pub use render_graph::{
     PostProcessNode, RenderContext, RenderGraph, RenderGraphBuilder, RenderNode, RenderTarget,
     WorldPostProcessNode,
 };
+pub use scene_projection::SceneProjection;
 pub use texture::{Sprite, Texture};
 
 // Re-export glam math types for convenience
