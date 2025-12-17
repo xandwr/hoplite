@@ -1045,11 +1045,12 @@ impl Frame<'_> {
     /// ```
     pub fn capture_cursor(&self) {
         use winit::window::CursorGrabMode;
-        // Try confined mode first (keeps cursor in window), fall back to locked (hides cursor)
+        // Try locked mode first (best for FPS controls - unlimited mouse movement),
+        // fall back to confined (keeps cursor in window but hits edges)
         let _ = self
             .window
-            .set_cursor_grab(CursorGrabMode::Confined)
-            .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Locked));
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Confined));
         self.window.set_cursor_visible(false);
     }
 
@@ -2250,6 +2251,27 @@ impl ApplicationHandler for HopliteApp {
                 window.request_redraw();
             }
             _ => {}
+        }
+    }
+
+    /// Handle device events (raw input from hardware).
+    ///
+    /// This captures raw mouse motion events which are essential for FPS-style
+    /// camera controls when the cursor is locked. Unlike `CursorMoved` events,
+    /// `MouseMotion` events report delta movement even when the cursor is locked
+    /// and cannot move.
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let HopliteApp::Running { input, .. } = self else {
+            return;
+        };
+
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            input.handle_raw_mouse_motion(delta.0 as f32, delta.1 as f32);
         }
     }
 }

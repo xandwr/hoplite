@@ -379,7 +379,7 @@ impl FreelookCamera {
         // Apply constraints based on mode
         match &self.mode {
             FreelookMode::Unseated => {
-                // Clamp pitch to avoid gimbal lock
+                // Clamp pitch to avoid gimbal lock (no yaw constraint)
                 self.pitch = self.pitch.clamp(
                     -std::f32::consts::FRAC_PI_2 + 0.01,
                     std::f32::consts::FRAC_PI_2 - 0.01,

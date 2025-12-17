@@ -260,4 +260,20 @@ impl Input {
     pub fn scroll_delta(&self) -> Vec2 {
         self.scroll_delta
     }
+
+    /// Handles raw mouse motion from device events.
+    ///
+    /// This is called for `DeviceEvent::MouseMotion` events, which provide
+    /// raw mouse movement independent of cursor position. This is essential
+    /// for FPS-style camera controls when the cursor is locked (grabbed),
+    /// as `CursorMoved` events stop reporting movement when the cursor
+    /// hits window boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// * `dx` - Horizontal movement (positive = right)
+    /// * `dy` - Vertical movement (positive = down)
+    pub fn handle_raw_mouse_motion(&mut self, dx: f32, dy: f32) {
+        self.mouse_delta += Vec2::new(dx, dy);
+    }
 }
