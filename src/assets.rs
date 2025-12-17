@@ -18,10 +18,10 @@
 //!
 //! ```ignore
 //! // Load a custom font
-//! let font_id = assets.load_font("fonts/MyFont.ttf", 24.0);
+//! let font_id = assets.load_font(&gpu, "fonts/MyFont.ttf", 24.0);
 //!
 //! // Or use the embedded default font
-//! let default_id = assets.default_font(16.0);
+//! let default_id = assets.default_font(&gpu, 16.0);
 //!
 //! // Access the font atlas for rendering
 //! if let Some(atlas) = assets.font(font_id) {
@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```ignore
-/// let font_id = assets.load_font("my_font.ttf", 24.0);
+/// let font_id = assets.load_font(&gpu, "my_font.ttf", 24.0);
 /// let atlas = assets.font(font_id).expect("Font should exist");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -384,14 +384,6 @@ const EMBEDDED_FONT: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.ttf");
 /// Currently focused on font management, it provides methods to load fonts from
 /// files or raw bytes, and access them via lightweight [`FontId`] handles.
 ///
-/// # Lifetime Management
-///
-/// Assets holds a raw pointer to [`GpuContext`] for texture creation. This is safe
-/// because:
-/// - `Assets` is created by and owned by the application
-/// - `GpuContext` outlives `Assets` in the application lifecycle
-/// - Access is confined to the main/render thread
-///
 /// # Font Caching
 ///
 /// Fonts are stored in an `Arc` to allow shared access from multiple renderers.
@@ -400,12 +392,12 @@ const EMBEDDED_FONT: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.ttf");
 /// # Example
 ///
 /// ```ignore
-/// let mut assets = Assets::new(&gpu);
+/// let mut assets = Assets::new();
 ///
-/// // Load fonts at initialization
-/// let title_font = assets.load_font("fonts/title.ttf", 48.0);
-/// let body_font = assets.load_font("fonts/body.ttf", 16.0);
-/// let debug_font = assets.default_font(12.0);
+/// // Load fonts at initialization (requires GPU context)
+/// let title_font = assets.load_font(&gpu, "fonts/title.ttf", 48.0);
+/// let body_font = assets.load_font(&gpu, "fonts/body.ttf", 16.0);
+/// let debug_font = assets.default_font(&gpu, 12.0);
 ///
 /// // Use fonts for rendering
 /// if let Some(atlas) = assets.font(title_font) {
@@ -413,36 +405,14 @@ const EMBEDDED_FONT: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.ttf");
 /// }
 /// ```
 pub struct Assets {
-    /// Raw pointer to the GPU context for creating textures.
-    gpu: *const GpuContext,
     /// Loaded font atlases, indexed by [`FontId`].
     pub(crate) fonts: Vec<Arc<FontAtlas>>,
-    /// Reserved field for caching the default font at a specific size.
-    #[allow(dead_code)]
-    default_font: Option<FontId>,
 }
 
 impl Assets {
     /// Creates a new asset manager.
-    ///
-    /// This is called internally by the application during initialization.
-    /// The `gpu` reference must remain valid for the lifetime of the `Assets` instance.
-    pub(crate) fn new(gpu: &GpuContext) -> Self {
-        Self {
-            gpu: gpu as *const GpuContext,
-            fonts: Vec::new(),
-            default_font: None,
-        }
-    }
-
-    /// Returns a reference to the GPU context.
-    ///
-    /// # Safety
-    ///
-    /// This is safe because `Assets` lifetime is tied to the application lifetime,
-    /// and `GpuContext` is guaranteed to outlive `Assets`.
-    fn gpu(&self) -> &GpuContext {
-        unsafe { &*self.gpu }
+    pub(crate) fn new() -> Self {
+        Self { fonts: Vec::new() }
     }
 
     /// Loads a font from a file path.
@@ -452,6 +422,7 @@ impl Assets {
     ///
     /// # Arguments
     ///
+    /// * `gpu` - GPU context for creating the font atlas texture
     /// * `path` - Path to a TTF or OTF font file
     /// * `size` - Font size in pixels
     ///
@@ -462,11 +433,11 @@ impl Assets {
     /// # Example
     ///
     /// ```ignore
-    /// let font_id = assets.load_font("assets/fonts/Roboto.ttf", 24.0);
+    /// let font_id = assets.load_font(&gpu, "assets/fonts/Roboto.ttf", 24.0);
     /// ```
-    pub fn load_font(&mut self, path: impl AsRef<Path>, size: f32) -> FontId {
+    pub fn load_font(&mut self, gpu: &GpuContext, path: impl AsRef<Path>, size: f32) -> FontId {
         let data = std::fs::read(path.as_ref()).expect("Failed to read font file");
-        self.load_font_bytes(&data, size)
+        self.load_font_bytes(gpu, &data, size)
     }
 
     /// Loads a font from raw TTF/OTF bytes.
@@ -476,14 +447,15 @@ impl Assets {
     ///
     /// # Arguments
     ///
+    /// * `gpu` - GPU context for creating the font atlas texture
     /// * `data` - Raw bytes of a TTF or OTF font file
     /// * `size` - Font size in pixels
     ///
     /// # Panics
     ///
     /// Panics if the font data cannot be parsed.
-    pub fn load_font_bytes(&mut self, data: &[u8], size: f32) -> FontId {
-        let atlas = FontAtlas::new(self.gpu(), data, size);
+    pub fn load_font_bytes(&mut self, gpu: &GpuContext, data: &[u8], size: f32) -> FontId {
+        let atlas = FontAtlas::new(gpu, data, size);
         let id = FontId(self.fonts.len());
         self.fonts.push(Arc::new(atlas));
         id
@@ -494,6 +466,11 @@ impl Assets {
     /// Uses the built-in JetBrains Mono font, which is ideal for debug text,
     /// developer consoles, and other UI elements requiring a monospace font.
     ///
+    /// # Arguments
+    ///
+    /// * `gpu` - GPU context for creating the font atlas texture
+    /// * `size` - Font size in pixels
+    ///
     /// # Note
     ///
     /// Currently creates a new atlas for each call. For repeated use at the same
@@ -503,13 +480,13 @@ impl Assets {
     ///
     /// ```ignore
     /// // Load once during initialization
-    /// let debug_font = assets.default_font(14.0);
+    /// let debug_font = assets.default_font(&gpu, 14.0);
     ///
     /// // Reuse the ID for rendering
     /// let atlas = assets.font(debug_font).unwrap();
     /// ```
-    pub fn default_font(&mut self, size: f32) -> FontId {
-        self.load_font_bytes(EMBEDDED_FONT, size)
+    pub fn default_font(&mut self, gpu: &GpuContext, size: f32) -> FontId {
+        self.load_font_bytes(gpu, EMBEDDED_FONT, size)
     }
 
     /// Retrieves a font atlas by its ID.

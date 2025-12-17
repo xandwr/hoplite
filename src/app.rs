@@ -176,7 +176,7 @@ impl<'a> SetupContext<'a> {
     /// frame.text(10.0, 10.0, "Hello!");
     /// ```
     pub fn default_font(&mut self, size: f32) -> FontId {
-        let font = self.assets.default_font(size);
+        let font = self.assets.default_font(self.gpu, size);
         *self.default_font = Some(font);
         font
     }
@@ -1664,7 +1664,7 @@ impl ApplicationHandler for HopliteApp {
 
             let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
             let gpu = GpuContext::new(window.clone());
-            let mut assets = Assets::new(&gpu);
+            let mut assets = Assets::new();
             let mut draw_2d = Draw2d::new(&gpu);
 
             // Create shared mesh queue for 3D rendering
