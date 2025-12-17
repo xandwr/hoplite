@@ -571,10 +571,10 @@ impl<'a> SetupContext<'a> {
         Ok(self.add_texture(texture))
     }
 
-    /// Create a procedural Minecraft-style blocky noise texture.
+    /// Create a procedural blocky noise texture.
     ///
     /// Generates a random pattern of earthy colors (browns, grays) suitable
-    /// for dirt/stone surfaces. Uses nearest-neighbor filtering for that
+    /// for dirt/stone surfaces. Uses nearest-neighbor filtering for a
     /// classic blocky aesthetic.
     ///
     /// # Arguments
@@ -585,12 +585,12 @@ impl<'a> SetupContext<'a> {
     /// # Returns
     ///
     /// A texture index.
-    pub fn texture_minecraft_noise(&mut self, size: u32, seed: u32) -> usize {
+    pub fn texture_blocky_noise(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_noise(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
-    /// Create a procedural Minecraft-style grass texture.
+    /// Create a procedural blocky grass texture.
     ///
     /// Generates a green grass pattern with color variation.
     ///
@@ -602,12 +602,12 @@ impl<'a> SetupContext<'a> {
     /// # Returns
     ///
     /// A texture index.
-    pub fn texture_minecraft_grass(&mut self, size: u32, seed: u32) -> usize {
+    pub fn texture_blocky_grass(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_grass(self.gpu, size, seed);
         self.add_texture(texture)
     }
 
-    /// Create a procedural Minecraft-style cobblestone texture.
+    /// Create a procedural blocky stone texture.
     ///
     /// Generates a gray stone pattern with cracks and variation.
     ///
@@ -619,7 +619,7 @@ impl<'a> SetupContext<'a> {
     /// # Returns
     ///
     /// A texture index.
-    pub fn texture_minecraft_cobblestone(&mut self, size: u32, seed: u32) -> usize {
+    pub fn texture_blocky_stone(&mut self, size: u32, seed: u32) -> usize {
         let texture = Texture::blocky_stone(self.gpu, size, seed);
         self.add_texture(texture)
     }
@@ -745,7 +745,7 @@ impl<'a> SetupContext<'a> {
         Ok(self.add_sprite(sprite))
     }
 
-    /// Create a sprite from a procedural Minecraft-style noise texture.
+    /// Create a sprite from a procedural blocky noise texture.
     ///
     /// Useful for testing and demos. Generates a blocky, earthy pattern.
     ///
@@ -757,19 +757,18 @@ impl<'a> SetupContext<'a> {
     /// # Returns
     ///
     /// A [`SpriteId`] for the generated sprite.
-    pub fn sprite_minecraft_noise(&mut self, size: u32, seed: u32) -> SpriteId {
-        let data = generate_minecraft_noise_data(size, seed);
-        let sprite =
-            Sprite::from_rgba_nearest(self.gpu, &data, size, size, "Minecraft Noise Sprite");
+    pub fn sprite_blocky_noise(&mut self, size: u32, seed: u32) -> SpriteId {
+        let data = generate_blocky_noise_data(size, seed);
+        let sprite = Sprite::from_rgba_nearest(self.gpu, &data, size, size, "Blocky Noise Sprite");
         self.add_sprite(sprite)
     }
 }
 
-/// Generate RGBA pixel data for a Minecraft-style blocky noise texture.
+/// Generate RGBA pixel data for a blocky noise texture.
 ///
 /// This is an internal helper function that generates procedural texture data
-/// using a simple hash-based approach. The result mimics the earthy, blocky
-/// aesthetic of Minecraft textures.
+/// using a simple hash-based approach. The result has an earthy, blocky
+/// aesthetic.
 ///
 /// # Arguments
 ///
@@ -779,7 +778,7 @@ impl<'a> SetupContext<'a> {
 /// # Returns
 ///
 /// A `Vec<u8>` containing RGBA pixel data (4 bytes per pixel, row-major order).
-fn generate_minecraft_noise_data(size: u32, seed: u32) -> Vec<u8> {
+fn generate_blocky_noise_data(size: u32, seed: u32) -> Vec<u8> {
     let mut data = vec![0u8; (size * size * 4) as usize];
 
     // Earthy color palette for the blocky aesthetic

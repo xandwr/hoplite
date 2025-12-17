@@ -17,11 +17,11 @@ fn main() {
         // Create a cube mesh
         let cube = ctx.mesh_cube();
 
-        // Create a procedural Minecraft-style noise texture (16x16 for that blocky look)
-        let texture = ctx.texture_minecraft_noise(16, 42);
+        // Create a procedural blocky noise texture (16x16 for that pixelated look)
+        let texture = ctx.texture_blocky_noise(16, 42);
 
         // Create a 2D sprite for the UI (same procedural texture, rendered in 2D layer)
-        let sprite = ctx.sprite_minecraft_noise(32, 123);
+        let sprite = ctx.sprite_blocky_noise(32, 123);
 
         // Camera: auto-rotate or interactive orbit
         let mut orbit = OrbitCamera::new()
@@ -67,7 +67,7 @@ fn main() {
             frame.text_color(
                 18.0,
                 y + 48.0,
-                "Minecraft cube near black hole",
+                "Textured cube near black hole",
                 Color::rgba(0.5, 0.8, 0.5, 1.0),
             );
             frame.text_color(

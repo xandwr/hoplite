@@ -74,7 +74,7 @@ Meshes render with depth testing, respecting effect passes and post-processing i
 run(|ctx| {
     ctx.enable_mesh_rendering();
     let cube = ctx.mesh_cube();
-    let tex = ctx.texture_minecraft_cobblestone(16, 42);
+    let tex = ctx.texture_blocky_stone(16, 42);
 
     move |frame| {
         frame.draw_mesh_textured(cube, Transform::new(), Color::WHITE, tex);
@@ -228,9 +228,9 @@ cargo run --example black_hole
 | `add_texture(texture)` | Add a texture, returns index |
 | `texture_from_file(path)` | Load texture from file |
 | `texture_from_bytes(bytes, label)` | Load texture from memory |
-| `texture_minecraft_noise(size, seed)` | Procedural dirt/stone texture |
-| `texture_minecraft_grass(size, seed)` | Procedural grass texture |
-| `texture_minecraft_cobblestone(size, seed)` | Procedural cobblestone texture |
+| `texture_blocky_noise(size, seed)` | Procedural dirt/stone texture |
+| `texture_blocky_grass(size, seed)` | Procedural grass texture |
+| `texture_blocky_stone(size, seed)` | Procedural stone texture |
 | `add_sprite(sprite)` | Add a sprite, returns SpriteId |
 | `sprite_from_file(path)` | Load sprite from file (linear filtering) |
 | `sprite_from_file_nearest(path)` | Load sprite from file (pixel art) |

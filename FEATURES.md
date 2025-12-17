@@ -36,7 +36,7 @@
 ## Textures & Sprites
 
 - **Texture loading** — Load from files, bytes, or raw RGBA data
-- **Procedural textures** — Built-in Minecraft-style generators (noise, grass, cobblestone)
+- **Procedural textures** — Working on this one...
 - **2D Sprites** — Screen-space sprite rendering with the 2D layer
 - **Sprite regions** — Draw sub-regions of sprites for sprite sheets/atlases
 - **Filtering modes** — Linear (smooth) or nearest-neighbor (pixel art) filtering

@@ -33,7 +33,7 @@ use crate::gpu::GpuContext;
 /// A GPU texture that can be bound to shaders.
 ///
 /// Textures are configured with nearest-neighbor filtering and repeating address mode,
-/// making them ideal for Minecraft-style blocky/pixelated 3D rendering where textures
+/// making them ideal for blocky/pixelated 3D rendering where textures
 /// tile across surfaces.
 #[derive(Debug)]
 pub struct Texture {
@@ -112,7 +112,7 @@ impl Texture {
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Use nearest-neighbor filtering for that crispy Minecraft look
+        // Use nearest-neighbor filtering for crisp pixel-art look
         let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some(&format!("{} Sampler", label)),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -186,10 +186,10 @@ impl Texture {
         Ok(Self::from_rgba(gpu, &img, width, height, label))
     }
 
-    /// Generate a procedural Minecraft-style noise texture.
+    /// Generate a procedural blocky noise texture.
     ///
     /// Creates a blocky, pixelated texture with earthy colors reminiscent of
-    /// Minecraft dirt/stone blocks. Uses a hash-based noise function for
+    /// dirt/stone blocks. Uses a hash-based noise function for
     /// deterministic, reproducible results.
     ///
     /// # Arguments
@@ -204,7 +204,7 @@ impl Texture {
     pub fn blocky_noise(gpu: &GpuContext, size: u32, seed: u32) -> Self {
         let mut data = vec![0u8; (size * size * 4) as usize];
 
-        // Minecraft-style color palette (earthy tones)
+        // Blocky color palette (earthy tones)
         let colors: &[[u8; 3]] = &[
             [139, 90, 43],   // Brown (dirt)
             [128, 128, 128], // Gray (stone)
@@ -237,12 +237,12 @@ impl Texture {
             }
         }
 
-        Self::from_rgba(gpu, &data, size, size, "Minecraft Noise Texture")
+        Self::from_rgba(gpu, &data, size, size, "Blocky Noise Texture")
     }
 
     /// Generate a procedural grass-top block texture.
     ///
-    /// Creates a Minecraft-style grass texture using various shades of green.
+    /// Creates a blocky grass texture using various shades of green.
     /// Suitable for the top face of grass blocks.
     ///
     /// # Arguments
@@ -278,12 +278,12 @@ impl Texture {
             }
         }
 
-        Self::from_rgba(gpu, &data, size, size, "Minecraft Grass Texture")
+        Self::from_rgba(gpu, &data, size, size, "Blocky Grass Texture")
     }
 
     /// Generate a procedural stone texture.
     ///
-    /// Creates a Minecraft-style stone texture with blocky stone patterns
+    /// Creates a blocky stone texture with stone patterns
     /// and subtle cracks between stones. Uses 4×4 pixel blocks to create the
     /// characteristic stone appearance.
     ///
@@ -332,7 +332,7 @@ impl Texture {
             }
         }
 
-        Self::from_rgba(gpu, &data, size, size, "Minecraft Cobblestone Texture")
+        Self::from_rgba(gpu, &data, size, size, "Blocky Stone Texture")
     }
 
     /// Simple hash function for procedural generation.
