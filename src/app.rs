@@ -85,6 +85,7 @@ use crate::draw2d::SpriteId;
 use crate::draw2d::{Color, Draw2d};
 use crate::ecs::{MeshId, TextureId};
 use crate::effect_pass::EffectPass;
+use crate::geometry::PendingGeometry;
 use crate::gpu::GpuContext;
 use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
 use crate::input::Input;
@@ -96,8 +97,124 @@ use crate::render_graph::{
     PostProcessNode, RenderGraph, WorldPostProcessNode,
 };
 use crate::texture::{Sprite, Texture};
+use glam::{Quat, Vec3};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// A fluent builder for loading geometry and registering it as a mesh.
+///
+/// Created by [`SetupContext::load`] or [`SetupContext::load_stl_bytes`].
+/// Chain transformation methods and call `.unwrap()` or `.build()` to get a [`MeshId`].
+///
+/// # Example
+///
+/// ```no_run
+/// use hoplite::*;
+///
+/// run(|ctx| {
+///     ctx.enable_mesh_rendering();
+///
+///     // Load and transform in one fluent chain
+///     let model = ctx.load("spaceship.stl")
+///         .centered()        // Center at origin
+///         .normalized()      // Fit in unit cube
+///         .scaled(3.0)       // Scale up
+///         .unwrap();
+///
+///     move |frame| {
+///         frame.draw_mesh(model, Transform::new(), Color::WHITE);
+///     }
+/// });
+/// ```
+pub struct MeshLoader<'a> {
+    gpu: &'a GpuContext,
+    mesh_queue: &'a Rc<RefCell<MeshQueue>>,
+    pending: PendingGeometry,
+}
+
+impl<'a> MeshLoader<'a> {
+    /// Center the geometry at the origin.
+    ///
+    /// Moves the geometry so its bounding box center is at (0, 0, 0).
+    pub fn centered(mut self) -> Self {
+        self.pending = self.pending.centered();
+        self
+    }
+
+    /// Scale the geometry to fit within a unit cube.
+    ///
+    /// The geometry will fit within -0.5 to 0.5 on all axes,
+    /// preserving aspect ratio.
+    pub fn normalized(mut self) -> Self {
+        self.pending = self.pending.normalized();
+        self
+    }
+
+    /// Apply a uniform scale factor.
+    pub fn scaled(mut self, factor: f32) -> Self {
+        self.pending = self.pending.scaled(factor);
+        self
+    }
+
+    /// Translate the geometry by an offset.
+    pub fn translated(mut self, offset: Vec3) -> Self {
+        self.pending = self.pending.translated(offset);
+        self
+    }
+
+    /// Recalculate smooth vertex normals.
+    ///
+    /// Computes normals by averaging face normals at each vertex.
+    /// Useful for STL files which only store face normals.
+    pub fn smooth_normals(mut self) -> Self {
+        self.pending = self.pending.smooth_normals();
+        self
+    }
+
+    /// Reorient the geometry from Z-up to Y-up.
+    ///
+    /// Many 3D modeling tools (Blender, etc.) export with Z as the up axis,
+    /// while game engines typically use Y-up. This applies a -90 degree
+    /// rotation around the X axis to convert between them.
+    pub fn upright(mut self) -> Self {
+        self.pending = self.pending.upright();
+        self
+    }
+
+    /// Rotate the geometry by a custom quaternion.
+    pub fn rotated_by(mut self, rotation: Quat) -> Self {
+        self.pending = self.pending.rotated_by(rotation);
+        self
+    }
+
+    /// Build the mesh and register it, returning the [`MeshId`].
+    ///
+    /// Returns an error if loading or parsing failed.
+    pub fn build(self) -> Result<MeshId, crate::geometry::GeometryError> {
+        let mesh = self.pending.upload(self.gpu)?;
+        Ok(self.mesh_queue.borrow_mut().add_mesh(mesh))
+    }
+
+    /// Build the mesh and register it, panicking on error.
+    ///
+    /// This is the most common way to finalize loading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the geometry could not be loaded.
+    pub fn unwrap(self) -> MeshId {
+        self.build().expect("Failed to load geometry")
+    }
+
+    /// Build the mesh and register it, panicking with a custom message.
+    ///
+    /// # Panics
+    ///
+    /// Panics with the provided message if loading fails.
+    pub fn expect(self, msg: &str) -> MeshId {
+        self.build().expect(msg)
+    }
+}
 
 /// Context provided during the setup phase of a Hoplite application.
 ///
@@ -559,6 +676,91 @@ fn fs() -> @location(0) vec4f {{
     /// A type-safe [`MeshId`] for use with [`Frame::mesh`] or [`Frame::draw_mesh`].
     pub fn add_mesh(&mut self, mesh: Mesh) -> MeshId {
         self.mesh_queue.borrow_mut().add_mesh(mesh)
+    }
+
+    // ========================================================================
+    // Geometry Loading
+    // ========================================================================
+
+    /// Load 3D geometry from a file with a fluent builder API.
+    ///
+    /// This is the fun, ergonomic way to load models! The format is detected
+    /// from the file extension. Currently supports:
+    /// - `.stl` - STL files (binary and ASCII)
+    ///
+    /// # The Fluent API
+    ///
+    /// Chain transformation methods before calling `.unwrap()` or `.build()`:
+    ///
+    /// ```no_run
+    /// use hoplite::*;
+    ///
+    /// run(|ctx| {
+    ///     ctx.enable_mesh_rendering();
+    ///
+    ///     // Simple load
+    ///     let model = ctx.load("model.stl").unwrap();
+    ///
+    ///     // With transformations - center it, fit to unit size, and scale up
+    ///     let model = ctx.load("model.stl")
+    ///         .centered()        // Move bounding box center to origin
+    ///         .normalized()      // Scale to fit in unit cube
+    ///         .scaled(2.0)       // Then scale up 2x
+    ///         .smooth_normals()  // Recalculate vertex normals
+    ///         .unwrap();
+    ///
+    ///     move |frame| {
+    ///         frame.draw_mesh(model, Transform::new(), Color::WHITE);
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// # Available Transformations
+    ///
+    /// | Method | Description |
+    /// |--------|-------------|
+    /// | `.centered()` | Move geometry center to origin |
+    /// | `.normalized()` | Scale to fit in unit cube |
+    /// | `.scaled(f)` | Apply uniform scale factor |
+    /// | `.translated(v)` | Move by offset vector |
+    /// | `.smooth_normals()` | Recalculate vertex normals |
+    ///
+    /// # Returns
+    ///
+    /// A [`MeshLoader`] builder that registers the mesh on `.unwrap()` or `.build()`.
+    pub fn load(&self, path: &str) -> MeshLoader<'_> {
+        MeshLoader {
+            gpu: self.gpu,
+            mesh_queue: self.mesh_queue,
+            pending: PendingGeometry::from_file(path),
+        }
+    }
+
+    /// Load 3D geometry from bytes with format auto-detection.
+    ///
+    /// Perfect for embedding models with `include_bytes!`. The format is
+    /// inferred from the content.
+    ///
+    /// ```no_run
+    /// use hoplite::*;
+    ///
+    /// const SHIP: &[u8] = include_bytes!("../assets/ship.stl");
+    ///
+    /// run(|ctx| {
+    ///     ctx.enable_mesh_rendering();
+    ///     let ship = ctx.load_stl_bytes(SHIP).centered().normalized().unwrap();
+    ///
+    ///     move |frame| {
+    ///         frame.draw_mesh(ship, Transform::new(), Color::WHITE);
+    ///     }
+    /// });
+    /// ```
+    pub fn load_stl_bytes(&self, bytes: &[u8]) -> MeshLoader<'_> {
+        MeshLoader {
+            gpu: self.gpu,
+            mesh_queue: self.mesh_queue,
+            pending: PendingGeometry::from_stl_bytes(bytes),
+        }
     }
 
     // ========================================================================

@@ -47,6 +47,7 @@ mod draw2d;
 mod ecs;
 mod effect_pass;
 mod freelook_camera;
+mod geometry;
 mod gpu;
 mod hot_shader;
 mod input;
@@ -60,14 +61,15 @@ pub mod scene;
 mod texture;
 
 pub use app::{
-    AppConfig, Frame, MeshBuilder, SceneSetupContext, SetupContext, run, run_with_config,
-    run_with_scenes, run_with_scenes_config,
+    AppConfig, Frame, MeshBuilder, MeshLoader, SceneSetupContext, SetupContext, run,
+    run_with_config, run_with_scenes, run_with_scenes_config,
 };
 pub use assets::{Assets, FontAtlas, FontId};
 pub use camera::Camera;
 pub use draw2d::{Color, Draw2d, PanelBuilder, Rect, SpriteId};
 pub use effect_pass::EffectPass;
 pub use freelook_camera::{FreelookCamera, FreelookMode, SeatedConfig};
+pub use geometry::{GeometryError, GeometryLoader, PendingGeometry, RawGeometry};
 pub use gpu::GpuContext;
 pub use hot_shader::{HotEffectPass, HotPostProcessPass, HotShader, HotWorldPostProcessPass};
 pub use input::Input;

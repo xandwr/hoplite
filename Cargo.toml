@@ -18,6 +18,7 @@ glam = "0.30.9"
 hecs = "0.10.5"
 image = "0.25.9"
 pollster = "0.4.0"
+stl_io = "0.10.0"
 wgpu = "27.0.1"
 winit = "0.30.12"
 
@@ -32,3 +33,7 @@ path = "examples/sphere.rs"
 [[example]]
 name = "seated"
 path = "examples/seated.rs"
+
+[[example]]
+name = "stl_loader"
+path = "examples/stl_loader.rs"

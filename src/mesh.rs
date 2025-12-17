@@ -65,8 +65,10 @@
 //!
 //! This layout is exposed via [`Vertex3d::LAYOUT`] for custom pipeline creation.
 
+use crate::geometry::{GeometryError, GeometryLoader};
 use crate::gpu::GpuContext;
 use glam::{Mat4, Vec3};
+use std::path::Path;
 
 /// A vertex for 3D mesh rendering with position, normal, and texture coordinates.
 ///
@@ -527,6 +529,69 @@ impl Mesh {
         let indices = vec![0, 1, 2, 2, 3, 0];
 
         Self::new(gpu, &vertices, &indices)
+    }
+
+    /// Loads a mesh from an STL file.
+    ///
+    /// This is a convenience method for loading STL files directly. For more
+    /// control over the loading process (centering, scaling, etc.), use
+    /// [`GeometryLoader`] instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The GPU context for buffer allocation
+    /// * `path` - Path to the STL file (binary or ASCII format)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hoplite::*;
+    ///
+    /// run(|ctx| {
+    ///     ctx.enable_mesh_rendering();
+    ///
+    ///     let model = Mesh::from_stl(&ctx.gpu, "model.stl").unwrap();
+    ///     let model_idx = ctx.add_mesh(model);
+    ///
+    ///     move |frame| {
+    ///         frame.draw_mesh(model_idx, Transform::new(), Color::WHITE);
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// STL files don't contain UV coordinates, so all UVs will be `[0.0, 0.0]`.
+    /// For textured models, consider generating UVs or using a format that
+    /// supports them (like OBJ or glTF).
+    pub fn from_stl(gpu: &GpuContext, path: impl AsRef<Path>) -> Result<Self, GeometryError> {
+        GeometryLoader::from_stl(gpu, path).build()
+    }
+
+    /// Loads a mesh from STL bytes.
+    ///
+    /// Perfect for embedding models in your binary with `include_bytes!`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use hoplite::*;
+    ///
+    /// const SHIP_STL: &[u8] = include_bytes!("../assets/ship.stl");
+    ///
+    /// run(|ctx| {
+    ///     ctx.enable_mesh_rendering();
+    ///
+    ///     let ship = Mesh::from_stl_bytes(&ctx.gpu, SHIP_STL).unwrap();
+    ///     let ship_idx = ctx.add_mesh(ship);
+    ///
+    ///     move |frame| {
+    ///         frame.draw_mesh(ship_idx, Transform::new(), Color::WHITE);
+    ///     }
+    /// });
+    /// ```
+    pub fn from_stl_bytes(gpu: &GpuContext, bytes: &[u8]) -> Result<Self, GeometryError> {
+        GeometryLoader::from_stl_bytes(gpu, bytes).build()
     }
 }
 
