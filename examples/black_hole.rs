@@ -34,7 +34,7 @@ fn main() {
         // Frame loop
         move |frame| {
             orbit.update(frame.input, frame.dt);
-            *frame.camera = orbit.camera();
+            frame.set_camera(orbit.camera());
 
             // Animate the cube: hover above the black hole and rotate
             let hover_height = 8.0 + (frame.time * 0.5).sin() * 0.5;
@@ -45,15 +45,17 @@ fn main() {
                 frame.time * 0.3,
             );
 
-            // Draw the textured cube
-            frame.draw_mesh_textured_white(
-                cube,
-                Transform::new()
-                    .position(Vec3::new(0.0, hover_height, 0.0))
-                    .rotation(rotation)
-                    .uniform_scale(10.0),
-                texture,
-            );
+            // Draw the textured cube using the fluent builder API
+            frame
+                .mesh(cube)
+                .transform(
+                    Transform::new()
+                        .position(Vec3::new(0.0, hover_height, 0.0))
+                        .rotation(rotation)
+                        .uniform_scale(10.0),
+                )
+                .texture(texture)
+                .draw();
 
             // Draw debug overlay
             let y = frame.panel_titled(10.0, 10.0, 220.0, 120.0, "Debug Overlay");

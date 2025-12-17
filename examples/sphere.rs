@@ -15,7 +15,7 @@ fn main() {
 
         move |frame| {
             orbit.update(frame.input, frame.dt);
-            *frame.camera = orbit.camera();
+            frame.set_camera(orbit.camera());
         }
     });
 }

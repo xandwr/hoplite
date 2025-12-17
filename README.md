@@ -31,6 +31,20 @@ Hoplite is built on three principles:
 
 ## Features
 
+### Background Color (No Shader Required)
+
+```rust
+run(|ctx| {
+    ctx.background_color(Color::rgb(0.1, 0.1, 0.15));  // Dark blue-gray
+    ctx.enable_mesh_rendering();
+    let cube = ctx.mesh_cube();
+
+    move |frame| {
+        frame.mesh(cube).at(0.0, 0.0, -5.0).draw();
+    }
+});
+```
+
 ### Shader-First Rendering
 
 ```rust
@@ -47,7 +61,7 @@ run(|ctx| {
 
 Effects and post-process passes chain automatically. The render graph handles ping-pong buffers, texture binding, and presentation.
 
-### 3D Mesh Rendering
+### 3D Mesh Rendering (Fluent Builder API)
 
 ```rust
 run(|ctx| {
@@ -56,12 +70,19 @@ run(|ctx| {
     let sphere = ctx.mesh_sphere(32, 16);
 
     move |frame| {
-        frame.draw_mesh(cube, Transform::new()
-            .position(Vec3::new(0.0, 2.0, 0.0))
-            .rotation(Quat::from_rotation_y(frame.time))
-            .uniform_scale(1.5),
-            Color::rgb(0.9, 0.3, 0.2)
-        );
+        // Fluent builder style (recommended)
+        frame.mesh(cube)
+            .at(0.0, 2.0, -5.0)
+            .color(Color::rgb(0.9, 0.3, 0.2))
+            .draw();
+
+        // With full transform control
+        frame.mesh(sphere)
+            .transform(Transform::new()
+                .position(Vec3::new(0.0, 0.0, -3.0))
+                .rotation(Quat::from_rotation_y(frame.time)))
+            .color(Color::BLUE)
+            .draw();
     }
 });
 ```
@@ -74,9 +95,13 @@ Meshes render with depth testing, respecting effect passes and post-processing i
 run(|ctx| {
     ctx.enable_mesh_rendering();
     let cube = ctx.mesh_cube();
-    let tex = ctx.texture_blocky_stone(16, 42);
+    let tex = ctx.texture_blocky_stone(16, 42);  // Returns TextureId
 
     move |frame| {
+        // Builder style
+        frame.mesh(cube).texture(tex).draw();
+
+        // Or classic style
         frame.draw_mesh_textured(cube, Transform::new(), Color::WHITE, tex);
     }
 });
@@ -114,7 +139,7 @@ let mut orbit = OrbitCamera::new()
 
 move |frame| {
     orbit.update(frame.input, frame.dt);
-    *frame.camera = orbit.camera();
+    frame.set_camera(orbit.camera());  // Clean camera setting
 }
 ```
 
@@ -125,12 +150,12 @@ Interactive mode: drag to rotate, scroll to zoom. Auto-rotate mode for demos and
 ```rust
 run(|ctx| {
     ctx.enable_mesh_rendering();
-    let cube = ctx.mesh_cube();
+    let cube = ctx.mesh_cube();  // Returns MeshId (type-safe handle)
 
     // Spawn entities during setup
     ctx.world.spawn((
         Transform::new().position(Vec3::new(0.0, 0.0, -5.0)),
-        RenderMesh::new(MeshHandle(cube), Color::RED),
+        RenderMesh::new(cube, Color::RED),  // MeshId directly, no wrapper needed
     ));
 
     move |frame| {
@@ -213,6 +238,7 @@ cargo run --example black_hole
 | Method | Description |
 |--------|-------------|
 | `default_font(size)` | Load the default font at given pixel size |
+| `background_color(color)` | Set solid background color (no shader needed) |
 | `effect(shader)` | Add a screen-space effect pass |
 | `effect_world(shader)` | Add a world-space effect with camera uniforms |
 | `post_process(shader)` | Add screen-space post-processing |
@@ -222,16 +248,16 @@ cargo run --example black_hole
 | `hot_post_process(path)` | Hot-reloadable screen-space post-process |
 | `hot_post_process_world(path)` | Hot-reloadable world-space post-process |
 | `enable_mesh_rendering()` | Enable 3D mesh pipeline |
-| `mesh_cube()` | Create a unit cube mesh |
-| `mesh_sphere(segments, rings)` | Create a UV sphere mesh |
-| `mesh_plane(size)` | Create a flat plane mesh |
-| `add_texture(texture)` | Add a texture, returns index |
-| `texture_from_file(path)` | Load texture from file |
+| `mesh_cube()` | Create a unit cube mesh, returns `MeshId` |
+| `mesh_sphere(segments, rings)` | Create a UV sphere mesh, returns `MeshId` |
+| `mesh_plane(size)` | Create a flat plane mesh, returns `MeshId` |
+| `add_texture(texture)` | Add a texture, returns `TextureId` |
+| `texture_from_file(path)` | Load texture from file, returns `TextureId` |
 | `texture_from_bytes(bytes, label)` | Load texture from memory |
 | `texture_blocky_noise(size, seed)` | Procedural dirt/stone texture |
 | `texture_blocky_grass(size, seed)` | Procedural grass texture |
 | `texture_blocky_stone(size, seed)` | Procedural stone texture |
-| `add_sprite(sprite)` | Add a sprite, returns SpriteId |
+| `add_sprite(sprite)` | Add a sprite, returns `SpriteId` |
 | `sprite_from_file(path)` | Load sprite from file (linear filtering) |
 | `sprite_from_file_nearest(path)` | Load sprite from file (pixel art) |
 | `sprite_from_bytes(bytes, label)` | Load sprite from memory |
@@ -242,19 +268,34 @@ cargo run --example black_hole
 |--------|-------------|
 | `fps()` | Current frames per second |
 | `width()` / `height()` | Screen dimensions in pixels |
+| `set_camera(camera)` | Set the camera (cleaner than `*frame.camera = ...`) |
+| `mesh(id)` | Start a mesh builder chain (fluent API) |
+| `draw_mesh(id, transform, color)` | Draw a 3D mesh (classic API) |
+| `draw_mesh_textured(id, transform, color, tex)` | Draw a textured 3D mesh (classic API) |
 | `text(x, y, str)` | Draw text at position |
 | `text_color(x, y, str, color)` | Draw colored text |
 | `rect(x, y, w, h, color)` | Draw filled rectangle |
 | `panel(x, y, w, h)` | Draw a bordered panel |
 | `panel_titled(x, y, w, h, title)` | Panel with title bar |
-| `draw_mesh(index, transform, color)` | Draw a 3D mesh |
-| `draw_mesh_textured(index, transform, color, tex)` | Draw a textured 3D mesh |
 | `sprite(id, x, y)` | Draw sprite at position |
 | `sprite_tinted(id, x, y, tint)` | Draw sprite with color tint |
 | `sprite_scaled(id, x, y, w, h)` | Draw sprite at custom size |
 | `sprite_scaled_tinted(id, x, y, w, h, tint)` | Draw scaled sprite with tint |
 | `sprite_region(id, x, y, w, h, sx, sy, sw, sh)` | Draw sprite sub-region |
 | `render_world()` | Render all ECS entities with `Transform` + `RenderMesh` |
+
+### Mesh Builder (`MeshBuilder`)
+
+The fluent API for drawing meshes, created via `frame.mesh(id)`:
+
+| Method | Description |
+|--------|-------------|
+| `.at(x, y, z)` | Set position |
+| `.position(Vec3)` | Set position from Vec3 |
+| `.transform(Transform)` | Set full transform (position, rotation, scale) |
+| `.color(Color)` | Set color/tint |
+| `.texture(TextureId)` | Apply texture |
+| `.draw()` | Queue the mesh for rendering |
 
 ### Frame Fields
 
@@ -263,7 +304,7 @@ cargo run --example black_hole
 | `time` | `f32` | Total elapsed time in seconds |
 | `dt` | `f32` | Delta time since last frame |
 | `input` | `&Input` | Keyboard and mouse state |
-| `camera` | `&mut Camera` | Current camera (modify to change view) |
+| `camera` | `&mut Camera` | Current camera (or use `set_camera()`) |
 | `world` | `&mut World` | ECS world for entity management |
 | `gpu` | `&GpuContext` | Low-level GPU access |
 | `draw` | `&mut Draw2d` | Low-level 2D API |

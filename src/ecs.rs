@@ -16,7 +16,7 @@
 //!     // Spawn an entity with mesh components
 //!     ctx.world.spawn((
 //!         Transform::new().position(Vec3::new(0.0, 0.0, -5.0)),
-//!         RenderMesh::new(MeshHandle(cube), Color::RED),
+//!         RenderMesh::new(cube, Color::RED),
 //!     ));
 //!
 //!     move |frame| {
@@ -27,19 +27,40 @@
 
 use crate::draw2d::Color;
 
-/// Handle to a mesh stored in the MeshQueue.
+/// Type-safe handle to a mesh stored in the MeshQueue.
 ///
 /// Obtained from mesh creation methods like [`SetupContext::mesh_cube`](crate::SetupContext::mesh_cube).
-/// Use this in [`RenderMesh`] components to reference which mesh geometry to render.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct MeshHandle(pub usize);
-
-/// Handle to a texture stored in the MeshQueue.
+/// This newtype wrapper prevents accidentally passing texture indices where mesh indices are expected.
 ///
-/// Obtained from texture creation methods like [`SetupContext::add_texture`](crate::SetupContext::add_texture).
-/// Use this in [`RenderMesh`] components to apply a texture to the mesh.
+/// # Example
+///
+/// ```ignore
+/// let cube: MeshId = ctx.mesh_cube();
+/// frame.mesh(cube).draw();  // Type-safe: can't pass a TextureId here
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TextureHandle(pub usize);
+pub struct MeshId(pub(crate) usize);
+
+/// Type-safe handle to a texture stored in the MeshQueue.
+///
+/// Obtained from texture creation methods like [`SetupContext::texture_from_file`](crate::SetupContext::texture_from_file).
+/// This newtype wrapper prevents accidentally passing mesh indices where texture indices are expected.
+///
+/// # Example
+///
+/// ```ignore
+/// let tex: TextureId = ctx.texture_from_file("brick.png")?;
+/// frame.mesh(cube).texture(tex).draw();  // Type-safe: can't pass a MeshId here
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TextureId(pub(crate) usize);
+
+// Keep MeshHandle and TextureHandle as aliases for backwards compatibility in ECS contexts
+/// Alias for [`MeshId`] - used in ECS components.
+pub type MeshHandle = MeshId;
+
+/// Alias for [`TextureId`] - used in ECS components.
+pub type TextureHandle = TextureId;
 
 /// Component for rendering a mesh on an entity.
 ///

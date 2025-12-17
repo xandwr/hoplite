@@ -13,8 +13,18 @@
 //! fn main() {
 //!     run(|ctx| {
 //!         ctx.default_font(16.0);
+//!         ctx.background_color(Color::rgb(0.1, 0.1, 0.15));
+//!         ctx.enable_mesh_rendering();
+//!
+//!         let cube = ctx.mesh_cube();
 //!
 //!         move |frame| {
+//!             // Fluent mesh builder API
+//!             frame.mesh(cube)
+//!                 .at(0.0, 0.0, -5.0)
+//!                 .color(Color::RED)
+//!                 .draw();
+//!
 //!             frame.text(10.0, 10.0, &format!("FPS: {:.0}", frame.fps()));
 //!         }
 //!     });
@@ -26,6 +36,7 @@
 //! - **One closure, one call** — Setup and frame logic live in closures. No traits to implement.
 //! - **Hot reload everything** — Edit WGSL shaders and watch them update instantly.
 //! - **Escape hatches everywhere** — Start simple, access the full wgpu API when needed.
+//! - **Type-safe handles** — `MeshId` and `TextureId` prevent mix-ups at compile time.
 //!
 //! See the [repository](https://github.com/xandwr/hoplite) for full documentation and examples.
 
@@ -45,7 +56,7 @@ mod post_process;
 mod render_graph;
 mod texture;
 
-pub use app::{AppConfig, Frame, SetupContext, run, run_with_config};
+pub use app::{AppConfig, Frame, MeshBuilder, SetupContext, run, run_with_config};
 pub use assets::{Assets, FontAtlas, FontId};
 pub use camera::Camera;
 pub use draw2d::{Color, Draw2d, PanelBuilder, Rect, SpriteId};
@@ -71,6 +82,6 @@ pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 pub use winit::event::MouseButton;
 pub use winit::keyboard::KeyCode;
 
-// ECS support
-pub use ecs::{MeshHandle, RenderMesh, TextureHandle};
+// ECS support and type-safe handles
+pub use ecs::{MeshHandle, MeshId, RenderMesh, TextureHandle, TextureId};
 pub use hecs::{Entity, World};

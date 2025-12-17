@@ -83,6 +83,7 @@ use crate::assets::{Assets, FontId};
 use crate::camera::Camera;
 use crate::draw2d::SpriteId;
 use crate::draw2d::{Color, Draw2d};
+use crate::ecs::{MeshId, TextureId};
 use crate::effect_pass::EffectPass;
 use crate::gpu::GpuContext;
 use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
@@ -181,6 +182,65 @@ impl<'a> SetupContext<'a> {
         let font = self.assets.default_font(self.gpu, size);
         *self.default_font = Some(font);
         font
+    }
+
+    // ========================================================================
+    // Background Color
+    // ========================================================================
+
+    /// Set a solid background color for the application.
+    ///
+    /// This is the simplest way to set a background - no shader required.
+    /// Use this when you just want a solid color behind your content.
+    ///
+    /// For dynamic backgrounds, use [`effect`](Self::effect) or
+    /// [`hot_effect`](Self::hot_effect) instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `color` - Background color (use [`Color`](crate::Color) for convenience)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.background_color(Color::rgb(0.1, 0.1, 0.15)); // Dark blue-gray
+    /// ctx.enable_mesh_rendering();
+    ///
+    /// move |frame| {
+    ///     frame.mesh(cube).at(0.0, 0.0, -5.0).draw();
+    /// }
+    /// ```
+    pub fn background_color(&mut self, color: Color) -> &mut Self {
+        // Create a minimal shader that just outputs the color
+        let shader = format!(
+            r#"
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct Uniforms {{
+    resolution: vec2f,
+    time: f32,
+}}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4f {{
+    var pos = array<vec2f, 3>(
+        vec2f(-1.0, -1.0),
+        vec2f(3.0, -1.0),
+        vec2f(-1.0, 3.0)
+    );
+    return vec4f(pos[vertex_index], 0.0, 1.0);
+}}
+
+@fragment
+fn fs_main() -> @location(0) vec4f {{
+    return vec4f({:.6}, {:.6}, {:.6}, {:.6});
+}}
+"#,
+            color.r, color.g, color.b, color.a
+        );
+        let effect = EffectPass::new(self.gpu, &shader);
+        self.add_node(EffectNode::new(effect));
+        self
     }
 
     // ========================================================================
@@ -420,16 +480,18 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    /// A type-safe [`MeshId`] for use with [`Frame::mesh`] or [`Frame::draw_mesh`].
     ///
     /// # Example
     ///
     /// ```ignore
     /// let cube = ctx.mesh_cube();
-    /// // In frame:
+    /// // In frame (builder style):
+    /// frame.mesh(cube).at(0.0, 0.0, -5.0).color(Color::RED).draw();
+    /// // Or classic style:
     /// frame.draw_mesh(cube, Transform::translation(0.0, 0.0, -5.0), Color::RED);
     /// ```
-    pub fn mesh_cube(&mut self) -> usize {
+    pub fn mesh_cube(&mut self) -> MeshId {
         let mesh = Mesh::cube(self.gpu);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
@@ -447,15 +509,15 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    /// A type-safe [`MeshId`] for use with [`Frame::mesh`] or [`Frame::draw_mesh`].
     ///
     /// # Example
     ///
     /// ```ignore
     /// let sphere = ctx.mesh_sphere(32, 24);  // Smooth sphere
-    /// let low_poly = ctx.mesh_sphere(8, 6); // Chunky sphere
+    /// let low_poly = ctx.mesh_sphere(8, 6);  // Chunky sphere
     /// ```
-    pub fn mesh_sphere(&mut self, segments: u32, rings: u32) -> usize {
+    pub fn mesh_sphere(&mut self, segments: u32, rings: u32) -> MeshId {
         let mesh = Mesh::sphere(self.gpu, segments, rings);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
@@ -471,14 +533,14 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A mesh index that can be passed to [`Frame::draw_mesh`].
+    /// A type-safe [`MeshId`] for use with [`Frame::mesh`] or [`Frame::draw_mesh`].
     ///
     /// # Example
     ///
     /// ```ignore
     /// let ground = ctx.mesh_plane(100.0);  // 100x100 ground plane
     /// ```
-    pub fn mesh_plane(&mut self, size: f32) -> usize {
+    pub fn mesh_plane(&mut self, size: f32) -> MeshId {
         let mesh = Mesh::plane(self.gpu, size);
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
@@ -493,8 +555,8 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A mesh index that can be passed to [`Frame::draw_mesh`].
-    pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
+    /// A type-safe [`MeshId`] for use with [`Frame::mesh`] or [`Frame::draw_mesh`].
+    pub fn add_mesh(&mut self, mesh: Mesh) -> MeshId {
         self.mesh_queue.borrow_mut().add_mesh(mesh)
     }
 
@@ -504,7 +566,7 @@ impl<'a> SetupContext<'a> {
 
     /// Add a texture to the texture pool for 3D mesh rendering.
     ///
-    /// Textures are applied to meshes using [`Frame::draw_mesh_textured`].
+    /// Textures are applied to meshes using [`Frame::mesh`] builder or [`Frame::draw_mesh_textured`].
     ///
     /// # Arguments
     ///
@@ -512,8 +574,8 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index that can be passed to [`Frame::draw_mesh_textured`].
-    pub fn add_texture(&mut self, texture: Texture) -> usize {
+    /// A type-safe [`TextureId`] for use with mesh rendering.
+    pub fn add_texture(&mut self, texture: Texture) -> TextureId {
         self.mesh_queue.borrow_mut().add_texture(texture)
     }
 
@@ -527,16 +589,18 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index on success, or an [`image::ImageError`] on failure.
+    /// A type-safe [`TextureId`] on success, or an [`image::ImageError`] on failure.
     ///
     /// # Example
     ///
     /// ```ignore
     /// let brick_tex = ctx.texture_from_file("assets/brick.png")?;
-    /// // In frame:
+    /// // In frame (builder style):
+    /// frame.mesh(cube).texture(brick_tex).draw();
+    /// // Or classic style:
     /// frame.draw_mesh_textured(cube, transform, Color::WHITE, brick_tex);
     /// ```
-    pub fn texture_from_file(&mut self, path: &str) -> Result<usize, image::ImageError> {
+    pub fn texture_from_file(&mut self, path: &str) -> Result<TextureId, image::ImageError> {
         let texture = Texture::from_file(self.gpu, path)?;
         Ok(self.add_texture(texture))
     }
@@ -552,7 +616,7 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index on success, or an [`image::ImageError`] on failure.
+    /// A type-safe [`TextureId`] on success, or an [`image::ImageError`] on failure.
     ///
     /// # Example
     ///
@@ -566,7 +630,7 @@ impl<'a> SetupContext<'a> {
         &mut self,
         bytes: &[u8],
         label: &str,
-    ) -> Result<usize, image::ImageError> {
+    ) -> Result<TextureId, image::ImageError> {
         let texture = Texture::from_bytes(self.gpu, bytes, label)?;
         Ok(self.add_texture(texture))
     }
@@ -584,8 +648,8 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index.
-    pub fn texture_blocky_noise(&mut self, size: u32, seed: u32) -> usize {
+    /// A type-safe [`TextureId`].
+    pub fn texture_blocky_noise(&mut self, size: u32, seed: u32) -> TextureId {
         let texture = Texture::blocky_noise(self.gpu, size, seed);
         self.add_texture(texture)
     }
@@ -601,8 +665,8 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index.
-    pub fn texture_blocky_grass(&mut self, size: u32, seed: u32) -> usize {
+    /// A type-safe [`TextureId`].
+    pub fn texture_blocky_grass(&mut self, size: u32, seed: u32) -> TextureId {
         let texture = Texture::blocky_grass(self.gpu, size, seed);
         self.add_texture(texture)
     }
@@ -618,8 +682,8 @@ impl<'a> SetupContext<'a> {
     ///
     /// # Returns
     ///
-    /// A texture index.
-    pub fn texture_blocky_stone(&mut self, size: u32, seed: u32) -> usize {
+    /// A type-safe [`TextureId`].
+    pub fn texture_blocky_stone(&mut self, size: u32, seed: u32) -> TextureId {
         let texture = Texture::blocky_stone(self.gpu, size, seed);
         self.add_texture(texture)
     }
@@ -1099,17 +1163,82 @@ impl Frame<'_> {
     }
 
     // ========================================================================
-    // 3D Mesh Rendering
+    // Camera Control
     // ========================================================================
 
-    /// Draw a 3D mesh with the given transform and color.
+    /// Set the camera for this frame.
     ///
-    /// The mesh is queued for rendering and will appear in the 3D scene.
-    /// Requires [`SetupContext::enable_mesh_rendering`] to be called during setup.
+    /// This is a cleaner alternative to `*frame.camera = camera`.
     ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `camera` - The camera configuration to use
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut orbit = OrbitCamera::new().distance(10.0);
+    /// move |frame| {
+    ///     orbit.update(frame.input, frame.dt);
+    ///     frame.set_camera(orbit.camera());
+    /// }
+    /// ```
+    pub fn set_camera(&mut self, camera: Camera) {
+        *self.camera = camera;
+    }
+
+    // ========================================================================
+    // 3D Mesh Rendering
+    // ========================================================================
+
+    /// Start building a mesh draw call with a fluent API.
+    ///
+    /// This is the preferred way to draw meshes - it's more readable and
+    /// discoverable than the classic `draw_mesh` methods.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh` - The mesh to draw (from `ctx.mesh_cube()`, etc.)
+    ///
+    /// # Returns
+    ///
+    /// A [`MeshBuilder`] for configuring and drawing the mesh.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Simple: draw at position with color
+    /// frame.mesh(cube).at(0.0, 2.0, -5.0).color(Color::RED).draw();
+    ///
+    /// // With texture
+    /// frame.mesh(cube).at(0.0, 0.0, -5.0).texture(brick_tex).draw();
+    ///
+    /// // Full control
+    /// frame.mesh(cube)
+    ///     .transform(Transform::new()
+    ///         .position(Vec3::Y * 2.0)
+    ///         .rotation(Quat::from_rotation_y(frame.time)))
+    ///     .color(Color::rgb(0.8, 0.2, 0.2))
+    ///     .texture(wood_tex)
+    ///     .draw();
+    /// ```
+    pub fn mesh(&mut self, mesh: MeshId) -> MeshBuilder<'_> {
+        MeshBuilder {
+            queue: &self.mesh_queue,
+            mesh,
+            transform: Transform::default(),
+            color: Color::WHITE,
+            texture: None,
+        }
+    }
+
+    /// Draw a 3D mesh with the given transform and color.
+    ///
+    /// For a more fluent API, consider using [`Self::mesh`] instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `mesh` - Handle returned by `SetupContext::mesh_*` or `add_mesh`
     /// * `transform` - Position, rotation, and scale of the mesh
     /// * `color` - Solid color for the mesh
     ///
@@ -1121,10 +1250,8 @@ impl Frame<'_> {
     ///     .rotate_y(frame.time * 0.5);
     /// frame.draw_mesh(cube, transform, Color::RED);
     /// ```
-    pub fn draw_mesh(&mut self, mesh_index: usize, transform: Transform, color: Color) {
-        self.mesh_queue
-            .borrow_mut()
-            .draw(mesh_index, transform, color);
+    pub fn draw_mesh(&mut self, mesh: MeshId, transform: Transform, color: Color) {
+        self.mesh_queue.borrow_mut().draw(mesh, transform, color);
     }
 
     /// Draw a 3D mesh with default white color.
@@ -1133,10 +1260,10 @@ impl Frame<'_> {
     ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `mesh` - Handle returned by `SetupContext::mesh_*` or `add_mesh`
     /// * `transform` - Position, rotation, and scale of the mesh
-    pub fn draw_mesh_white(&mut self, mesh_index: usize, transform: Transform) {
-        self.draw_mesh(mesh_index, transform, Color::WHITE);
+    pub fn draw_mesh_white(&mut self, mesh: MeshId, transform: Transform) {
+        self.draw_mesh(mesh, transform, Color::WHITE);
     }
 
     /// Draw a textured 3D mesh with a color tint.
@@ -1144,12 +1271,15 @@ impl Frame<'_> {
     /// The texture is sampled and multiplied by the color. Use `Color::WHITE`
     /// for no tinting (show texture as-is).
     ///
+    /// For a more fluent API, consider using [`Self::mesh`] instead:
+    /// `frame.mesh(cube).texture(tex).draw()`
+    ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `mesh` - Handle returned by `SetupContext::mesh_*` or `add_mesh`
     /// * `transform` - Position, rotation, and scale of the mesh
     /// * `color` - Tint color (multiplied with texture)
-    /// * `texture_index` - Index returned by `SetupContext::texture_*` or `add_texture`
+    /// * `texture` - Handle returned by `SetupContext::texture_*` or `add_texture`
     ///
     /// # Example
     ///
@@ -1162,32 +1292,35 @@ impl Frame<'_> {
     /// ```
     pub fn draw_mesh_textured(
         &mut self,
-        mesh_index: usize,
+        mesh: MeshId,
         transform: Transform,
         color: Color,
-        texture_index: usize,
+        texture: TextureId,
     ) {
         self.mesh_queue
             .borrow_mut()
-            .draw_textured(mesh_index, transform, color, texture_index);
+            .draw_textured(mesh, transform, color, texture);
     }
 
     /// Draw a textured 3D mesh with no color tint.
     ///
     /// Convenience method equivalent to `draw_mesh_textured(mesh, transform, Color::WHITE, texture)`.
     ///
+    /// For a more fluent API, consider using [`Self::mesh`] instead:
+    /// `frame.mesh(cube).texture(tex).draw()`
+    ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index returned by `SetupContext::mesh_*` or `add_mesh`
+    /// * `mesh` - Handle returned by `SetupContext::mesh_*` or `add_mesh`
     /// * `transform` - Position, rotation, and scale of the mesh
-    /// * `texture_index` - Index returned by `SetupContext::texture_*` or `add_texture`
+    /// * `texture` - Handle returned by `SetupContext::texture_*` or `add_texture`
     pub fn draw_mesh_textured_white(
         &mut self,
-        mesh_index: usize,
+        mesh: MeshId,
         transform: Transform,
-        texture_index: usize,
+        texture: TextureId,
     ) {
-        self.draw_mesh_textured(mesh_index, transform, Color::WHITE, texture_index);
+        self.draw_mesh_textured(mesh, transform, Color::WHITE, texture);
     }
 
     // ========================================================================
@@ -1387,7 +1520,7 @@ impl Frame<'_> {
     ///
     /// ctx.world.spawn((
     ///     Transform::new().position(Vec3::new(0.0, 0.0, -5.0)),
-    ///     RenderMesh::new(MeshHandle(cube), Color::RED),
+    ///     RenderMesh::new(cube, Color::RED),
     /// ));
     ///
     /// // Frame loop:
@@ -1403,18 +1536,124 @@ impl Frame<'_> {
         {
             if let Some(texture) = render_mesh.texture {
                 self.mesh_queue.borrow_mut().draw_textured(
-                    render_mesh.mesh.0,
+                    render_mesh.mesh,
                     *transform,
                     render_mesh.color,
-                    texture.0,
+                    texture,
                 );
             } else {
-                self.mesh_queue.borrow_mut().draw(
-                    render_mesh.mesh.0,
-                    *transform,
-                    render_mesh.color,
-                );
+                self.mesh_queue
+                    .borrow_mut()
+                    .draw(render_mesh.mesh, *transform, render_mesh.color);
             }
+        }
+    }
+}
+
+/// Builder for configuring and drawing a 3D mesh.
+///
+/// Created by [`Frame::mesh`]. Use the builder methods to configure the mesh's
+/// transform, color, and texture, then call [`draw`](Self::draw) to queue it for rendering.
+///
+/// # Example
+///
+/// ```ignore
+/// // Simple usage
+/// frame.mesh(cube).at(0.0, 2.0, -5.0).color(Color::RED).draw();
+///
+/// // With texture
+/// frame.mesh(cube).at(0.0, 0.0, -5.0).texture(brick_tex).draw();
+///
+/// // With full transform control
+/// frame.mesh(cube)
+///     .transform(Transform::new()
+///         .position(Vec3::new(0.0, 1.0, -5.0))
+///         .rotation(Quat::from_rotation_y(time)))
+///     .color(Color::rgb(0.8, 0.2, 0.2))
+///     .draw();
+/// ```
+pub struct MeshBuilder<'a> {
+    queue: &'a Rc<RefCell<MeshQueue>>,
+    mesh: MeshId,
+    transform: Transform,
+    color: Color,
+    texture: Option<TextureId>,
+}
+
+impl MeshBuilder<'_> {
+    /// Set the mesh position in world space.
+    ///
+    /// This is a convenience method that sets only the translation component.
+    /// For rotation or scale, use [`transform`](Self::transform).
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y`, `z` - World position coordinates
+    pub fn at(mut self, x: f32, y: f32, z: f32) -> Self {
+        self.transform = Transform::from_position(glam::Vec3::new(x, y, z));
+        self
+    }
+
+    /// Set the mesh position from a Vec3.
+    ///
+    /// This is a convenience method that sets only the translation component.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - World position as a Vec3
+    pub fn position(mut self, pos: glam::Vec3) -> Self {
+        self.transform = Transform::from_position(pos);
+        self
+    }
+
+    /// Set the full transform (position, rotation, scale).
+    ///
+    /// Use this when you need rotation or non-uniform scaling.
+    ///
+    /// # Arguments
+    ///
+    /// * `transform` - Full transform configuration
+    pub fn transform(mut self, transform: Transform) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Set the mesh color or tint.
+    ///
+    /// When used without a texture, this is the solid color of the mesh.
+    /// When used with a texture, this is multiplied with the texture colors.
+    ///
+    /// # Arguments
+    ///
+    /// * `color` - The color to apply
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Apply a texture to the mesh.
+    ///
+    /// The texture will be sampled using the mesh's UV coordinates and
+    /// multiplied by the color (default white = no tint).
+    ///
+    /// # Arguments
+    ///
+    /// * `texture` - Texture handle from `ctx.texture_*` methods
+    pub fn texture(mut self, texture: TextureId) -> Self {
+        self.texture = Some(texture);
+        self
+    }
+
+    /// Queue the mesh for rendering.
+    ///
+    /// This must be called to actually draw the mesh. The builder pattern
+    /// allows you to configure all options, then draw with a single call.
+    pub fn draw(self) {
+        let mut queue = self.queue.borrow_mut();
+        if let Some(texture) = self.texture {
+            queue.draw_textured(self.mesh, self.transform, self.color, texture);
+        } else {
+            queue.draw(self.mesh, self.transform, self.color);
         }
     }
 }

@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::draw2d::Color;
+use crate::ecs::{MeshId, TextureId};
 use crate::gpu::GpuContext;
 use crate::mesh::{Mesh, Transform};
 use crate::mesh_pass::{DrawCall, MeshPass};
@@ -18,19 +19,19 @@ use crate::texture::Texture;
 ///
 /// # Fields
 ///
-/// * `mesh_index` - Index into [`MeshQueue::meshes`]
+/// * `mesh` - Type-safe handle to the mesh geometry
 /// * `transform` - World-space transformation (position, rotation, scale)
 /// * `color` - RGBA color tint applied to the mesh
-/// * `texture_index` - Optional index into [`MeshQueue::textures`]
+/// * `texture` - Optional type-safe texture handle
 pub struct QueuedMesh {
-    /// Index of the mesh in the queue's mesh array.
-    pub mesh_index: usize,
+    /// Handle to the mesh in the queue's mesh array.
+    pub mesh: MeshId,
     /// World-space transformation for this instance.
     pub transform: Transform,
     /// Color tint multiplied with vertex colors and textures.
     pub color: Color,
-    /// Optional texture index. `None` uses vertex colors only.
-    pub texture_index: Option<usize>,
+    /// Optional texture handle. `None` uses vertex colors only.
+    pub texture: Option<TextureId>,
 }
 
 /// Shared storage for meshes, textures, and the per-frame draw queue.
@@ -81,10 +82,10 @@ impl MeshQueue {
         }
     }
 
-    /// Registers a mesh and returns its index for later use.
+    /// Registers a mesh and returns a type-safe handle for later use.
     ///
     /// Meshes are stored permanently until the queue is dropped. Use the
-    /// returned index with [`draw`](Self::draw) or [`draw_textured`](Self::draw_textured).
+    /// returned [`MeshId`] with [`draw`](Self::draw) or [`draw_textured`](Self::draw_textured).
     ///
     /// # Arguments
     ///
@@ -92,17 +93,17 @@ impl MeshQueue {
     ///
     /// # Returns
     ///
-    /// An index that can be used to reference this mesh in draw calls.
-    pub fn add_mesh(&mut self, mesh: Mesh) -> usize {
+    /// A [`MeshId`] that can be used to reference this mesh in draw calls.
+    pub fn add_mesh(&mut self, mesh: Mesh) -> MeshId {
         let idx = self.meshes.len();
         self.meshes.push(mesh);
-        idx
+        MeshId(idx)
     }
 
-    /// Registers a texture and returns its index for later use.
+    /// Registers a texture and returns a type-safe handle for later use.
     ///
     /// Textures are stored permanently until the queue is dropped. Use the
-    /// returned index with [`draw_textured`](Self::draw_textured).
+    /// returned [`TextureId`] with [`draw_textured`](Self::draw_textured).
     ///
     /// # Arguments
     ///
@@ -110,11 +111,11 @@ impl MeshQueue {
     ///
     /// # Returns
     ///
-    /// An index that can be used to reference this texture in draw calls.
-    pub fn add_texture(&mut self, texture: Texture) -> usize {
+    /// A [`TextureId`] that can be used to reference this texture in draw calls.
+    pub fn add_texture(&mut self, texture: Texture) -> TextureId {
         let idx = self.textures.len();
         self.textures.push(texture);
-        idx
+        TextureId(idx)
     }
 
     /// Queues a mesh for rendering this frame without a texture.
@@ -124,15 +125,15 @@ impl MeshQueue {
     ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index from [`add_mesh`](Self::add_mesh)
+    /// * `mesh` - Handle from [`add_mesh`](Self::add_mesh)
     /// * `transform` - World-space transformation
     /// * `color` - Color tint (use `Color::WHITE` for no tinting)
-    pub fn draw(&mut self, mesh_index: usize, transform: Transform, color: Color) {
+    pub fn draw(&mut self, mesh: MeshId, transform: Transform, color: Color) {
         self.draw_queue.push(QueuedMesh {
-            mesh_index,
+            mesh,
             transform,
             color,
-            texture_index: None,
+            texture: None,
         });
     }
 
@@ -143,22 +144,22 @@ impl MeshQueue {
     ///
     /// # Arguments
     ///
-    /// * `mesh_index` - Index from [`add_mesh`](Self::add_mesh)
+    /// * `mesh` - Handle from [`add_mesh`](Self::add_mesh)
     /// * `transform` - World-space transformation
     /// * `color` - Color tint (use `Color::WHITE` for no tinting)
-    /// * `texture_index` - Index from [`add_texture`](Self::add_texture)
+    /// * `texture` - Handle from [`add_texture`](Self::add_texture)
     pub fn draw_textured(
         &mut self,
-        mesh_index: usize,
+        mesh: MeshId,
         transform: Transform,
         color: Color,
-        texture_index: usize,
+        texture: TextureId,
     ) {
         self.draw_queue.push(QueuedMesh {
-            mesh_index,
+            mesh,
             transform,
             color,
-            texture_index: Some(texture_index),
+            texture: Some(texture),
         });
     }
 
@@ -276,11 +277,11 @@ impl RenderNode for MeshNode {
             .draw_queue
             .iter()
             .filter_map(|q| {
-                queue.meshes.get(q.mesh_index).map(|mesh| DrawCall {
+                queue.meshes.get(q.mesh.0).map(|mesh| DrawCall {
                     mesh,
                     transform: q.transform,
                     color: q.color,
-                    texture: q.texture_index.and_then(|idx| queue.textures.get(idx)),
+                    texture: q.texture.and_then(|t| queue.textures.get(t.0)),
                 })
             })
             .collect();
