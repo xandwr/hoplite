@@ -28,3 +28,7 @@ path = "examples/black_hole.rs"
 [[example]]
 name = "sphere"
 path = "examples/sphere.rs"
+
+[[example]]
+name = "seated"
+path = "examples/seated.rs"

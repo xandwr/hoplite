@@ -56,9 +56,13 @@ mod orbit_camera;
 mod picking;
 mod post_process;
 mod render_graph;
+pub mod scene;
 mod texture;
 
-pub use app::{AppConfig, Frame, MeshBuilder, SetupContext, run, run_with_config};
+pub use app::{
+    AppConfig, Frame, MeshBuilder, SceneSetupContext, SetupContext, run, run_with_config,
+    run_with_scenes, run_with_scenes_config,
+};
 pub use assets::{Assets, FontAtlas, FontId};
 pub use camera::Camera;
 pub use draw2d::{Color, Draw2d, PanelBuilder, Rect, SpriteId};

@@ -340,4 +340,93 @@ impl RenderGraph {
         gpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
+
+    /// Executes the render graph to an arbitrary target texture (not the screen).
+    ///
+    /// This is used during scene transitions to capture a scene's output to a
+    /// render target for crossfade effects. The scene is rendered normally through
+    /// all its passes, but the final output goes to the provided target instead
+    /// of the screen.
+    ///
+    /// Unlike [`execute_with_ui`](Self::execute_with_ui), this does NOT present
+    /// to the screen and does NOT include a UI overlay pass.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - GPU context
+    /// * `time` - Elapsed time in seconds
+    /// * `camera` - Current camera state
+    /// * `target` - The texture view to render to
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Capture scene output to a render target for compositing
+    /// let capture_target = RenderTarget::new(&gpu, "Scene Capture");
+    /// graph.execute_to_target(&gpu, time, &camera, &capture_target.view);
+    /// ```
+    pub fn execute_to_target(
+        &mut self,
+        gpu: &GpuContext,
+        time: f32,
+        camera: &Camera,
+        target: &wgpu::TextureView,
+    ) {
+        // Check for hot-reload changes before rendering
+        self.check_hot_reload(gpu);
+
+        // Ensure render targets are the right size
+        self.target_a.ensure_size(gpu, "RenderGraph Target A");
+        self.target_b.ensure_size(gpu, "RenderGraph Target B");
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("RenderGraph To Target Encoder"),
+            });
+
+        let node_count = self.nodes.len();
+
+        {
+            let mut ctx = RenderContext {
+                gpu,
+                encoder: &mut encoder,
+                time,
+                camera,
+            };
+
+            // For single node, render directly to provided target
+            if node_count == 1 {
+                self.nodes[0].execute(&mut ctx, target, None);
+            } else {
+                // Multi-pass: ping-pong between targets, final pass goes to provided target
+                let mut current_input: Option<&wgpu::TextureView> = None;
+
+                for (i, node) in self.nodes.iter().enumerate() {
+                    let is_last = i == node_count - 1;
+
+                    let node_target = if is_last {
+                        target
+                    } else if i % 2 == 0 {
+                        &self.target_a.view
+                    } else {
+                        &self.target_b.view
+                    };
+
+                    node.execute(&mut ctx, node_target, current_input);
+
+                    // Set up input for next pass
+                    if !is_last {
+                        current_input = Some(if i % 2 == 0 {
+                            &self.target_a.view
+                        } else {
+                            &self.target_b.view
+                        });
+                    }
+                }
+            }
+        }
+
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+    }
 }

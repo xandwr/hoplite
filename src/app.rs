@@ -973,13 +973,17 @@ pub struct Frame<'a> {
     pub dt: f32,
 
     /// Default font set during setup (if any).
-    default_font: Option<FontId>,
+    pub(crate) default_font: Option<FontId>,
 
     /// Shared mesh queue for 3D draw calls.
-    mesh_queue: Rc<RefCell<MeshQueue>>,
+    pub(crate) mesh_queue: Rc<RefCell<MeshQueue>>,
 
     /// Window handle for cursor control.
-    window: &'a Window,
+    pub(crate) window: &'a Window,
+
+    /// Scene switch request (used by scene manager).
+    /// When Some, contains (target_scene_name, transition).
+    pub(crate) scene_switch: Option<(String, crate::scene::Transition)>,
 }
 
 impl Frame<'_> {
@@ -1062,6 +1066,71 @@ impl Frame<'_> {
         use winit::window::CursorGrabMode;
         let _ = self.window.set_cursor_grab(CursorGrabMode::None);
         self.window.set_cursor_visible(true);
+    }
+
+    // ========================================================================
+    // Scene Management
+    // ========================================================================
+
+    /// Switch to another scene instantly.
+    ///
+    /// This queues a scene switch that will be processed at the start of the
+    /// next frame. The current scene's `on_exit` callback will be called,
+    /// followed by the new scene's `on_enter` callback.
+    ///
+    /// This method only works when using [`run_with_scenes`]. It has no effect
+    /// when using the standard [`run`] or [`run_with_config`] functions.
+    ///
+    /// # Arguments
+    ///
+    /// * `scene_name` - The name of the scene to switch to (as defined in setup)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if frame.input.key_pressed(KeyCode::Escape) {
+    ///     frame.switch_to("menu");
+    /// }
+    /// ```
+    pub fn switch_to(&mut self, scene_name: impl Into<String>) {
+        self.switch_to_with(scene_name, crate::scene::Transition::instant());
+    }
+
+    /// Switch to another scene with a transition effect.
+    ///
+    /// This queues a scene switch with the specified transition animation.
+    /// Available transitions include:
+    /// - [`Transition::instant()`] - Immediate switch (no animation)
+    /// - [`Transition::fade_to_black(duration)`] - Fade to black, then fade in
+    /// - [`Transition::fade_to_white(duration)`] - Fade to white, then fade in
+    /// - [`Transition::crossfade(duration)`] - Blend old and new scenes
+    ///
+    /// This method only works when using [`run_with_scenes`].
+    ///
+    /// # Arguments
+    ///
+    /// * `scene_name` - The name of the scene to switch to
+    /// * `transition` - The transition effect to use
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use hoplite::scene::Transition;
+    ///
+    /// if frame.input.key_pressed(KeyCode::Enter) {
+    ///     frame.switch_to_with("game", Transition::fade_to_black(0.5));
+    /// }
+    ///
+    /// if frame.input.key_pressed(KeyCode::Escape) {
+    ///     frame.switch_to_with("menu", Transition::crossfade(0.3));
+    /// }
+    /// ```
+    pub fn switch_to_with(
+        &mut self,
+        scene_name: impl Into<String>,
+        transition: crate::scene::Transition,
+    ) {
+        self.scene_switch = Some((scene_name.into(), transition));
     }
 
     // ========================================================================
@@ -2047,6 +2116,432 @@ where
     event_loop.run_app(&mut app).unwrap();
 }
 
+// ============================================================================
+// Scene-Based Application Support
+// ============================================================================
+
+/// Setup context extension for scene-based applications.
+///
+/// This extends [`SetupContext`] with methods for defining and managing scenes.
+/// Used with [`run_with_scenes`].
+pub struct SceneSetupContext<'a> {
+    /// Base setup context for global resource loading.
+    pub base: SetupContext<'a>,
+    /// Scene manager for registering scenes.
+    scene_manager: &'a mut crate::scene::SceneManager,
+}
+
+impl<'a> SceneSetupContext<'a> {
+    /// Load and register the default font at the specified size.
+    ///
+    /// See [`SetupContext::default_font`] for details.
+    pub fn default_font(&mut self, size: f32) -> FontId {
+        self.base.default_font(size)
+    }
+
+    /// Create a unit cube mesh.
+    ///
+    /// See [`SetupContext::mesh_cube`] for details.
+    pub fn mesh_cube(&mut self) -> MeshId {
+        self.base.mesh_cube()
+    }
+
+    /// Create a UV sphere mesh.
+    ///
+    /// See [`SetupContext::mesh_sphere`] for details.
+    pub fn mesh_sphere(&mut self, segments: u32, rings: u32) -> MeshId {
+        self.base.mesh_sphere(segments, rings)
+    }
+
+    /// Create a flat plane mesh.
+    ///
+    /// See [`SetupContext::mesh_plane`] for details.
+    pub fn mesh_plane(&mut self, size: f32) -> MeshId {
+        self.base.mesh_plane(size)
+    }
+
+    /// Add a custom mesh.
+    ///
+    /// See [`SetupContext::add_mesh`] for details.
+    pub fn add_mesh(&mut self, mesh: Mesh) -> MeshId {
+        self.base.add_mesh(mesh)
+    }
+
+    /// Add a texture.
+    ///
+    /// See [`SetupContext::add_texture`] for details.
+    pub fn add_texture(&mut self, texture: crate::texture::Texture) -> TextureId {
+        self.base.add_texture(texture)
+    }
+
+    /// Load a texture from file.
+    ///
+    /// See [`SetupContext::texture_from_file`] for details.
+    pub fn texture_from_file(&mut self, path: &str) -> Result<TextureId, image::ImageError> {
+        self.base.texture_from_file(path)
+    }
+
+    /// Create a procedural noise texture.
+    ///
+    /// See [`SetupContext::texture_blocky_noise`] for details.
+    pub fn texture_blocky_noise(&mut self, size: u32, seed: u32) -> TextureId {
+        self.base.texture_blocky_noise(size, seed)
+    }
+
+    /// Create a procedural grass texture.
+    ///
+    /// See [`SetupContext::texture_blocky_grass`] for details.
+    pub fn texture_blocky_grass(&mut self, size: u32, seed: u32) -> TextureId {
+        self.base.texture_blocky_grass(size, seed)
+    }
+
+    /// Create a procedural stone texture.
+    ///
+    /// See [`SetupContext::texture_blocky_stone`] for details.
+    pub fn texture_blocky_stone(&mut self, size: u32, seed: u32) -> TextureId {
+        self.base.texture_blocky_stone(size, seed)
+    }
+
+    /// Load a sprite from file.
+    ///
+    /// See [`SetupContext::sprite_from_file`] for details.
+    pub fn sprite_from_file(&mut self, path: &str) -> Result<SpriteId, image::ImageError> {
+        self.base.sprite_from_file(path)
+    }
+
+    /// Define a new scene.
+    ///
+    /// Each scene has its own render pipeline configuration and frame logic.
+    /// Assets (meshes, textures) are shared across all scenes.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique identifier for this scene
+    /// * `setup` - Closure that configures the scene's render pipeline and returns the frame closure
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ctx.scene("menu", |scene| {
+    ///     scene.background_color(Color::rgb(0.1, 0.1, 0.2));
+    ///
+    ///     move |frame| {
+    ///         frame.text(100.0, 100.0, "Press ENTER to start");
+    ///         if frame.input.key_pressed(KeyCode::Enter) {
+    ///             frame.switch_to("game");
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    pub fn scene<S, F>(&mut self, name: &str, setup: S) -> crate::scene::scene::SceneBuilder<'_>
+    where
+        S: FnOnce(&mut crate::scene::SceneSetupContext) -> F,
+        F: FnMut(&mut Frame) + 'static,
+    {
+        let mut render_graph = None;
+        let mesh_queue = Rc::clone(self.base.mesh_queue);
+
+        let mut scene_ctx =
+            crate::scene::SceneSetupContext::new(self.base.gpu, &mut render_graph, &mesh_queue);
+
+        let frame_fn = setup(&mut scene_ctx);
+
+        let scene = crate::scene::Scene::new(
+            crate::scene::SceneId::new(name),
+            render_graph,
+            mesh_queue,
+            Box::new(frame_fn),
+        );
+
+        let scene_id = scene.id.clone();
+        self.scene_manager.register(scene);
+
+        self.scene_manager.scene_builder(scene_id)
+    }
+
+    /// Set the initial active scene.
+    ///
+    /// This must be called to specify which scene is shown first.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the scene to start with
+    ///
+    /// # Panics
+    ///
+    /// Will print a warning if the scene doesn't exist (app continues but may show nothing).
+    pub fn start_scene(&mut self, name: &str) {
+        self.scene_manager.set_active(name);
+    }
+
+    /// Get direct access to the GPU context.
+    pub fn gpu(&self) -> &GpuContext {
+        self.base.gpu
+    }
+}
+
+/// Run a Hoplite application with multiple scenes.
+///
+/// This is the entry point for applications that need to switch between
+/// independent scenes, each with their own camera and render pipeline.
+///
+/// Unlike [`run`] which uses a single setup/frame closure pair, this
+/// function allows defining multiple named scenes that can be switched
+/// between using [`Frame::switch_to`] or [`Frame::switch_to_with`].
+///
+/// # Type Parameters
+///
+/// * `S` - Setup closure type: `FnOnce(&mut SceneSetupContext)`
+///
+/// # Arguments
+///
+/// * `setup` - A closure that receives a [`SceneSetupContext`] for defining scenes
+///
+/// # Example
+///
+/// ```ignore
+/// use hoplite::*;
+///
+/// fn main() {
+///     run_with_scenes(|ctx| {
+///         ctx.default_font(16.0);
+///         let cube = ctx.mesh_cube();
+///
+///         ctx.scene("menu", |scene| {
+///             scene.background_color(Color::rgb(0.1, 0.1, 0.2));
+///
+///             move |frame| {
+///                 frame.text(100.0, 100.0, "Press ENTER");
+///                 if frame.input.key_pressed(KeyCode::Enter) {
+///                     frame.switch_to_with("game", Transition::fade_to_black(0.5));
+///                 }
+///             }
+///         });
+///
+///         ctx.scene("game", |scene| {
+///             scene.enable_mesh_rendering();
+///             let mut orbit = OrbitCamera::new();
+///
+///             move |frame| {
+///                 orbit.update(frame.input, frame.dt);
+///                 frame.set_camera(orbit.camera());
+///                 frame.mesh(cube).draw();
+///             }
+///         });
+///
+///         ctx.start_scene("menu");
+///     });
+/// }
+/// ```
+pub fn run_with_scenes<S>(setup: S)
+where
+    S: FnOnce(&mut SceneSetupContext) + 'static,
+{
+    run_with_scenes_config(AppConfig::default(), setup);
+}
+
+/// Run a scene-based application with custom window configuration.
+///
+/// Like [`run_with_scenes`], but allows specifying window title and dimensions.
+pub fn run_with_scenes_config<S>(config: AppConfig, setup: S)
+where
+    S: FnOnce(&mut SceneSetupContext) + 'static,
+{
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    // Create scene setup function
+    let scene_setup: SceneSetupFn = Box::new(move |gpu, assets, draw, mesh_queue, world| {
+        let mut default_font = None;
+        let mut graph_builder = None;
+        let mut scene_manager = crate::scene::SceneManager::new();
+
+        // Initialize scene manager GPU resources
+        scene_manager.init_gpu_resources(gpu);
+
+        {
+            let base_ctx = SetupContext {
+                gpu,
+                assets,
+                draw,
+                world,
+                default_font: &mut default_font,
+                graph_builder: &mut graph_builder,
+                mesh_queue,
+            };
+
+            let mut ctx = SceneSetupContext {
+                base: base_ctx,
+                scene_manager: &mut scene_manager,
+            };
+
+            setup(&mut ctx);
+        }
+
+        (scene_manager, default_font)
+    });
+
+    let mut app = HopliteSceneApp::Pending {
+        config,
+        setup: Some(scene_setup),
+    };
+
+    event_loop.run_app(&mut app).unwrap();
+}
+
+/// Type alias for scene-based setup function.
+type SceneSetupFn = Box<
+    dyn FnOnce(
+        &GpuContext,
+        &mut Assets,
+        &mut Draw2d,
+        &Rc<RefCell<MeshQueue>>,
+        &mut hecs::World,
+    ) -> (crate::scene::SceneManager, Option<FontId>),
+>;
+
+/// Internal application state machine for scene-based apps.
+enum HopliteSceneApp {
+    /// Application is waiting for window creation.
+    Pending {
+        config: AppConfig,
+        setup: Option<SceneSetupFn>,
+    },
+    /// Application is running with scene management.
+    Running {
+        window: Arc<Window>,
+        gpu: GpuContext,
+        assets: Assets,
+        draw_2d: Draw2d,
+        input: Input,
+        world: hecs::World,
+        scene_manager: crate::scene::SceneManager,
+        default_font: Option<FontId>,
+        mesh_queue: Rc<RefCell<MeshQueue>>,
+        start_time: Instant,
+        last_frame: Instant,
+    },
+}
+
+impl ApplicationHandler for HopliteSceneApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let HopliteSceneApp::Pending { config, setup } = self {
+            let window_attrs = WindowAttributes::default()
+                .with_title(&config.title)
+                .with_inner_size(winit::dpi::LogicalSize::new(config.width, config.height));
+
+            let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
+            let gpu = GpuContext::new(window.clone());
+            let mut assets = Assets::new();
+            let mut draw_2d = Draw2d::new(&gpu);
+
+            let mesh_queue = Rc::new(RefCell::new(MeshQueue::new()));
+            let mut world = hecs::World::new();
+
+            // Run scene setup
+            let setup_fn = setup.take().unwrap();
+            let (scene_manager, default_font) =
+                setup_fn(&gpu, &mut assets, &mut draw_2d, &mesh_queue, &mut world);
+
+            *self = HopliteSceneApp::Running {
+                window,
+                gpu,
+                assets,
+                draw_2d,
+                input: Input::new(),
+                world,
+                scene_manager,
+                default_font,
+                mesh_queue,
+                start_time: Instant::now(),
+                last_frame: Instant::now(),
+            };
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let HopliteSceneApp::Running {
+            window,
+            gpu,
+            assets,
+            draw_2d,
+            input,
+            world,
+            scene_manager,
+            default_font,
+            mesh_queue,
+            start_time,
+            last_frame,
+        } = self
+        else {
+            return;
+        };
+
+        input.handle_event(&event);
+
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::Resized(size) => {
+                gpu.resize(size.width, size.height);
+            }
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let time = start_time.elapsed().as_secs_f32();
+                let dt = now.duration_since(*last_frame).as_secs_f32();
+                *last_frame = now;
+
+                // Clear draw_2d for new frame
+                draw_2d.clear();
+                draw_2d.update_font_bind_groups(gpu, assets);
+
+                // Clear mesh queue for new frame
+                mesh_queue.borrow_mut().clear_queue();
+
+                // Update scene manager (process transitions)
+                scene_manager.update(time);
+
+                // Run active scene's frame logic
+                scene_manager.run_frame(
+                    gpu,
+                    assets,
+                    draw_2d,
+                    input,
+                    world,
+                    time,
+                    dt,
+                    mesh_queue,
+                    window,
+                    *default_font,
+                );
+
+                // Render with transition effects if active
+                scene_manager.render(gpu, time, draw_2d, assets);
+
+                input.begin_frame();
+                window.request_redraw();
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let HopliteSceneApp::Running { input, .. } = self else {
+            return;
+        };
+
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            input.handle_raw_mouse_motion(delta.0 as f32, delta.1 as f32);
+        }
+    }
+}
+
 /// Type alias for the internal setup function.
 ///
 /// This boxed closure is created from the user's setup closure and handles
@@ -2232,6 +2727,7 @@ impl ApplicationHandler for HopliteApp {
                     default_font: *default_font,
                     mesh_queue: Rc::clone(mesh_queue),
                     window,
+                    scene_switch: None, // Only used with run_with_scenes
                 };
 
                 // Run user's frame function
