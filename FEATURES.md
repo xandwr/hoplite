@@ -33,6 +33,19 @@
 - **Per-mesh coloring** — Tint meshes at draw time
 - **Pipeline integration** — Meshes respect effect and post-process passes
 
+## Geometry Loading
+
+- **STL file support** — Load binary and ASCII STL files
+- **Fluent loading API** — Chain transformations when loading models
+  - `.centered()` — Move bounding box center to origin
+  - `.upright()` — Convert Z-up models to Y-up orientation
+  - `.normalized()` — Scale to fit in a unit cube
+  - `.scaled(factor)` — Apply uniform scale
+  - `.translated(offset)` — Move geometry
+  - `.rotated_by(quat)` — Apply custom rotation
+  - `.smooth_normals()` — Recalculate vertex normals
+- **Embedded assets** — Load from bytes with `include_bytes!`
+
 ## Textures & Sprites
 
 - **Texture loading** — Load from files, bytes, or raw RGBA data
@@ -145,7 +158,8 @@ src/
 ## Planned
 
 - [ ] Audio playback
-- [ ] More mesh primitives (cylinder, torus, custom OBJ loading)
+- [ ] More mesh primitives (cylinder, torus)
+- [ ] OBJ and glTF loading
 - [ ] Render-to-texture for offscreen rendering
 - [ ] Instanced mesh rendering
 - [ ] Shadow mapping

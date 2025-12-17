@@ -107,6 +107,28 @@ run(|ctx| {
 });
 ```
 
+### Loading 3D Models
+
+```rust
+run(|ctx| {
+    ctx.enable_mesh_rendering();
+
+    // Fluent API for loading and transforming geometry
+    let model = ctx.load("model.stl")
+        .centered()      // Center at origin
+        .upright()       // Convert Z-up to Y-up
+        .normalized()    // Fit in unit cube
+        .scaled(2.0)     // Scale to desired size
+        .unwrap();
+
+    move |frame| {
+        frame.mesh(model).draw();
+    }
+});
+```
+
+Load STL files with automatic transformations. The fluent API chains centering, orientation fixes, and scaling before GPU upload.
+
 ### 2D Sprites
 
 ```rust
@@ -251,6 +273,8 @@ cargo run --example black_hole
 | `mesh_cube()` | Create a unit cube mesh, returns `MeshId` |
 | `mesh_sphere(segments, rings)` | Create a UV sphere mesh, returns `MeshId` |
 | `mesh_plane(size)` | Create a flat plane mesh, returns `MeshId` |
+| `load(path)` | Load geometry from file, returns `MeshLoader` |
+| `load_stl_bytes(bytes)` | Load STL from bytes, returns `MeshLoader` |
 | `add_texture(texture)` | Add a texture, returns `TextureId` |
 | `texture_from_file(path)` | Load texture from file, returns `TextureId` |
 | `texture_from_bytes(bytes, label)` | Load texture from memory |
@@ -296,6 +320,22 @@ The fluent API for drawing meshes, created via `frame.mesh(id)`:
 | `.color(Color)` | Set color/tint |
 | `.texture(TextureId)` | Apply texture |
 | `.draw()` | Queue the mesh for rendering |
+
+### Mesh Loader (`MeshLoader`)
+
+The fluent API for loading geometry, created via `ctx.load(path)`:
+
+| Method | Description |
+|--------|-------------|
+| `.centered()` | Center geometry at origin |
+| `.upright()` | Convert Z-up to Y-up orientation |
+| `.normalized()` | Scale to fit in unit cube |
+| `.scaled(factor)` | Apply uniform scale |
+| `.translated(Vec3)` | Move geometry by offset |
+| `.rotated_by(Quat)` | Apply custom rotation |
+| `.smooth_normals()` | Recalculate vertex normals |
+| `.unwrap()` | Finalize and return `MeshId` |
+| `.build()` | Finalize and return `Result<MeshId>` |
 
 ### Frame Fields
 
