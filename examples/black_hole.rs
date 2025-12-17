@@ -40,27 +40,39 @@ fn main() {
             orbit.update(frame.input, frame.dt);
             frame.set_camera(orbit.camera());
 
-            // Animate the cube: hover above the black hole and rotate
+            // Animate the cubes: hover above the black hole and rotate
             let hover_height = 8.0 + (frame.time * 0.5).sin() * 0.5;
-            let rotation = Quat::from_euler(
-                glam::EulerRot::YXZ,
-                frame.time * 0.7,
-                frame.time * 0.5,
-                frame.time * 0.3,
-            );
 
-            // Draw the textured cube using the fluent builder API (if visible)
+            // Draw a 3x3 grid of textured cubes (if visible)
             if cube_visible {
-                frame
-                    .mesh(cube)
-                    .transform(
-                        Transform::new()
-                            .position(Vec3::new(0.0, hover_height, 0.0))
-                            .rotation(rotation)
-                            .uniform_scale(10.0),
-                    )
-                    .texture(texture)
-                    .draw();
+                let spacing = 12.0;
+                for row in 0..3 {
+                    for col in 0..3 {
+                        let idx = row * 3 + col;
+                        // Offset rotation per cube for visual variety
+                        let phase = idx as f32 * 0.3;
+                        let rotation = Quat::from_euler(
+                            glam::EulerRot::YXZ,
+                            frame.time * 0.7 + phase,
+                            frame.time * 0.5 + phase,
+                            frame.time * 0.3 + phase,
+                        );
+
+                        let x = (col as f32 - 1.0) * spacing;
+                        let z = (row as f32 - 1.0) * spacing;
+
+                        frame
+                            .mesh(cube)
+                            .transform(
+                                Transform::new()
+                                    .position(Vec3::new(x, hover_height, z))
+                                    .rotation(rotation)
+                                    .uniform_scale(3.0),
+                            )
+                            .texture(texture)
+                            .draw();
+                    }
+                }
             }
 
             // Draw debug overlay
@@ -101,9 +113,9 @@ fn main() {
 
             // Draw label above the sprite
             let label = if cube_visible {
-                "Cube: Shown"
+                "Cubes: Shown"
             } else {
-                "Cube: Hidden"
+                "Cubes: Hidden"
             };
             frame.text(sprite_x - 40.0, sprite_y - 20.0, label);
         }

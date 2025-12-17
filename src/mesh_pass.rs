@@ -70,7 +70,22 @@ pub struct CameraUniforms {
     pub time: f32,
 }
 
-/// Per-instance model uniforms.
+/// Per-instance data stored in a storage buffer for instanced rendering.
+///
+/// This structure is uploaded to the GPU once per frame for all instances,
+/// allowing efficient batched rendering with a single draw call per mesh type.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    /// Model matrix (object to world space transformation).
+    pub model: [[f32; 4]; 4],
+    /// Normal matrix (inverse transpose of model matrix) for correct normal transformation.
+    pub normal_matrix: [[f32; 4]; 4],
+    /// RGBA color multiplier applied to the mesh.
+    pub color: [f32; 4],
+}
+
+/// Legacy per-instance model uniforms (kept for compatibility).
 ///
 /// This structure is uploaded to the GPU for each draw call and provides
 /// the shader with model-specific transformation and color data.
@@ -139,12 +154,17 @@ pub struct DrawCall<'a> {
 /// 1. Call [`ensure_depth_size`](Self::ensure_depth_size) if the window may have resized
 /// 2. Optionally call [`blit`](Self::blit) to composite a background texture
 /// 3. Call [`render`](Self::render) with your camera and draw calls
+/// Maximum number of instances that can be rendered in a single batch.
+const MAX_INSTANCES: usize = 4096;
+
 pub struct MeshPass {
     pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    model_buffer: wgpu::Buffer,
-    model_bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
+    instance_bind_group_layout: wgpu::BindGroupLayout,
+    instance_bind_group: wgpu::BindGroup,
     /// The depth texture used for depth testing.
     pub(crate) depth_texture: wgpu::Texture,
     /// View into the depth texture for render pass attachment.
@@ -211,22 +231,22 @@ impl MeshPass {
             }],
         });
 
-        // Model uniform buffer (group 1)
-        let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Model Uniforms"),
-            size: std::mem::size_of::<ModelUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        // Instance storage buffer (group 1) - holds all instance data for batched rendering
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Storage Buffer"),
+            size: (std::mem::size_of::<InstanceData>() * MAX_INSTANCES) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let model_bind_group_layout =
+        let instance_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Model Bind Group Layout"),
+                label: Some("Instance Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -234,12 +254,12 @@ impl MeshPass {
                 }],
             });
 
-        let model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Model Bind Group"),
-            layout: &model_bind_group_layout,
+        let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Instance Bind Group"),
+            layout: &instance_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: model_buffer.as_entire_binding(),
+                resource: instance_buffer.as_entire_binding(),
             }],
         });
 
@@ -276,7 +296,7 @@ impl MeshPass {
             label: Some("Mesh Pipeline Layout"),
             bind_group_layouts: &[
                 &camera_bind_group_layout,
-                &model_bind_group_layout,
+                &instance_bind_group_layout,
                 &texture_bind_group_layout,
             ],
             push_constant_ranges: &[],
@@ -402,8 +422,9 @@ impl MeshPass {
             pipeline,
             camera_buffer,
             camera_bind_group,
-            model_buffer,
-            model_bind_group,
+            instance_buffer,
+            instance_bind_group_layout,
+            instance_bind_group,
             depth_texture,
             depth_view,
             depth_size: (gpu.width(), gpu.height()),
@@ -560,11 +581,11 @@ impl MeshPass {
     ///   - A texture bind group is created (using default white if no texture specified)
     ///   - The mesh is drawn with indexed rendering
     ///
-    /// # Performance Note
+    /// # Performance
     ///
-    /// Currently, model uniforms and texture bind groups are updated per draw call,
-    /// which may cause GPU stalls for large numbers of meshes. For better performance
-    /// with many instances, consider batching meshes with the same texture.
+    /// Uses instanced rendering with a storage buffer for per-instance data.
+    /// All instance transforms and colors are uploaded once before the render pass,
+    /// then batched draw calls render all instances of each mesh type efficiently.
     pub fn render(
         &self,
         gpu: &GpuContext,
@@ -596,38 +617,65 @@ impl MeshPass {
             bytemuck::cast_slice(&[camera_uniforms]),
         );
 
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        // Build instance data for all draw calls and group by (mesh, texture)
+        // We use raw pointers as keys since we need to identify unique mesh/texture combinations
+        use std::collections::HashMap;
 
-        // Render each mesh
-        for call in draw_calls {
+        // Key: (mesh pointer, texture pointer)
+        // Value: (mesh reference, texture reference, list of instance indices)
+        type BatchKey = (*const Mesh, *const Texture);
+        let mut batches: HashMap<BatchKey, (&Mesh, &Texture, Vec<u32>)> = HashMap::new();
+
+        let mut instance_data: Vec<InstanceData> =
+            Vec::with_capacity(draw_calls.len().min(MAX_INSTANCES));
+
+        for call in draw_calls.iter().take(MAX_INSTANCES) {
             let model_matrix = call.transform.matrix();
-            // Normal matrix is inverse transpose of model matrix (for non-uniform scaling)
             let normal_matrix = model_matrix.inverse().transpose();
 
-            let model_uniforms = ModelUniforms {
+            let instance_idx = instance_data.len() as u32;
+            instance_data.push(InstanceData {
                 model: model_matrix.to_cols_array_2d(),
                 normal_matrix: normal_matrix.to_cols_array_2d(),
                 color: [call.color.r, call.color.g, call.color.b, call.color.a],
-            };
+            });
 
-            gpu.queue.write_buffer(
-                &self.model_buffer,
-                0,
-                bytemuck::cast_slice(&[model_uniforms]),
-            );
-
-            render_pass.set_bind_group(1, &self.model_bind_group, &[]);
-
-            // Bind texture (use default white texture if none provided)
             let texture = call.texture.unwrap_or(&self.default_texture);
+            let key: BatchKey = (call.mesh as *const Mesh, texture as *const Texture);
+
+            batches
+                .entry(key)
+                .or_insert_with(|| (call.mesh, texture, Vec::new()))
+                .2
+                .push(instance_idx);
+        }
+
+        // Upload all instance data in one write before the render pass
+        if !instance_data.is_empty() {
+            gpu.queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+        }
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.instance_bind_group, &[]);
+
+        // Render each batch with instanced drawing
+        for (_key, (mesh, texture, indices)) in batches {
             let texture_bind_group = self.create_texture_bind_group(gpu, texture);
             render_pass.set_bind_group(2, &texture_bind_group, &[]);
 
-            render_pass.set_vertex_buffer(0, call.mesh.vertex_buffer.slice(..));
-            render_pass
-                .set_index_buffer(call.mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..call.mesh.index_count, 0, 0..1);
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            // Draw all instances of this mesh/texture combination
+            // Each instance uses its index into the storage buffer
+            for &instance_idx in &indices {
+                render_pass.draw_indexed(0..mesh.index_count, 0, instance_idx..instance_idx + 1);
+            }
         }
     }
 }
