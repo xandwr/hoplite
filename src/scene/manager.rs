@@ -342,9 +342,34 @@ impl SceneManager {
         if let Some(scene_name) = &self.active_scene {
             if let Some(scene) = self.scenes.get_mut(scene_name) {
                 if let Some(ref mut graph) = scene.render_graph {
-                    graph.execute_with_ui(gpu, time, &scene.camera, |gpu, pass| {
-                        draw_2d.render(gpu, pass, assets);
-                    });
+                    // Render scene to screen directly using execute_to_target
+                    graph.execute_to_target(gpu, time, &scene.camera, screen_view);
+
+                    // Render UI on top
+                    let mut encoder =
+                        gpu.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Scene UI Encoder"),
+                            });
+                    {
+                        let mut ui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Scene UI Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: screen_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        draw_2d.render(gpu, &mut ui_pass, assets);
+                    }
+                    gpu.queue.submit(std::iter::once(encoder.finish()));
                 } else {
                     // No render graph - just render 2D
                     render_2d_only(gpu, screen_view, draw_2d, assets);

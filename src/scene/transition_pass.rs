@@ -399,18 +399,27 @@ struct Uniforms {
 @group(0) @binding(1) var scene_texture: texture_2d<f32>;
 @group(0) @binding(2) var scene_sampler: sampler;
 
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
 @vertex
-fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-    // Fullscreen triangle
-    let x = f32(i32(vi) - 1);
-    let y = f32(i32(vi & 1u) * 2 - 1);
-    return vec4f(x, y, 0.0, 1.0);
+fn vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    // Fullscreen triangle (oversized to cover entire clip space)
+    // vi=0: (-1, -1), vi=1: (3, -1), vi=2: (-1, 3)
+    var out: VertexOutput;
+    let x = f32(i32(vi & 1u) * 4 - 1);
+    let y = f32(i32(vi & 2u) * 2 - 1);
+    out.position = vec4f(x, y, 0.0, 1.0);
+    // UV coordinates: map clip space to [0,1]
+    out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
 }
 
 @fragment
-fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-    let uv = pos.xy / u.resolution;
-    let scene = textureSample(scene_texture, scene_sampler, uv);
+fn fs(in: VertexOutput) -> @location(0) vec4f {
+    let scene = textureSample(scene_texture, scene_sampler, in.uv);
 
     // Blend scene with overlay color based on progress
     // progress = 0: full scene, progress = 1: full overlay color
@@ -432,19 +441,28 @@ struct Uniforms {
 @group(0) @binding(2) var new_texture: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
 
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+}
+
 @vertex
-fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-    // Fullscreen triangle
-    let x = f32(i32(vi) - 1);
-    let y = f32(i32(vi & 1u) * 2 - 1);
-    return vec4f(x, y, 0.0, 1.0);
+fn vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    // Fullscreen triangle (oversized to cover entire clip space)
+    // vi=0: (-1, -1), vi=1: (3, -1), vi=2: (-1, 3)
+    var out: VertexOutput;
+    let x = f32(i32(vi & 1u) * 4 - 1);
+    let y = f32(i32(vi & 2u) * 2 - 1);
+    out.position = vec4f(x, y, 0.0, 1.0);
+    // UV coordinates: map clip space to [0,1]
+    out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
 }
 
 @fragment
-fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-    let uv = pos.xy / u.resolution;
-    let old_scene = textureSample(old_texture, tex_sampler, uv);
-    let new_scene = textureSample(new_texture, tex_sampler, uv);
+fn fs(in: VertexOutput) -> @location(0) vec4f {
+    let old_scene = textureSample(old_texture, tex_sampler, in.uv);
+    let new_scene = textureSample(new_texture, tex_sampler, in.uv);
 
     // Crossfade: blend from old to new based on progress
     return mix(old_scene, new_scene, u.progress);
