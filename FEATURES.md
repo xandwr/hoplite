@@ -66,6 +66,17 @@
 - **Scroll wheel** — `scroll_delta()` for zoom and scroll interactions
 - **Per-frame semantics** — Clear distinction between pressed/down/released
 
+## Entity Component System (ECS)
+
+- **First-class hecs integration** — `World` available in both setup and frame contexts
+- **Built-in render components**:
+  - `MeshHandle` — Reference to a mesh in the queue
+  - `TextureHandle` — Reference to a texture in the queue
+  - `RenderMesh` — Component for renderable entities (mesh + color + optional texture)
+- **One-call rendering** — `frame.render_world()` renders all entities with `Transform` + `RenderMesh`
+- **Hybrid approach** — ECS and immediate-mode APIs work together seamlessly
+- **Dynamic entities** — Spawn, query, update, and despawn entities at runtime
+
 ## Uniforms & Shaders
 
 Screen-space shaders:
@@ -109,6 +120,7 @@ src/
 ├── texture.rs      # Texture rendering
 ├── mesh_pass.rs    # Mesh rendering pipeline
 ├── draw2d.rs       # Immediate-mode 2D rendering
+├── ecs.rs          # ECS components (MeshHandle, RenderMesh, etc.)
 ├── camera.rs       # Camera state
 ├── orbit_camera.rs # Orbit camera controller
 ├── input.rs        # Keyboard/mouse input
@@ -127,7 +139,7 @@ src/
 | fontdue | Font rasterization |
 | bytemuck | GPU buffer casting |
 | pollster | Async blocking |
-| hecs | ECS (available for user code) |
+| hecs | Entity Component System |
 | image | Image rendering |
 
 ## Planned

@@ -120,6 +120,33 @@ move |frame| {
 
 Interactive mode: drag to rotate, scroll to zoom. Auto-rotate mode for demos and visualizations.
 
+### Entity Component System (ECS)
+
+```rust
+run(|ctx| {
+    ctx.enable_mesh_rendering();
+    let cube = ctx.mesh_cube();
+
+    // Spawn entities during setup
+    ctx.world.spawn((
+        Transform::new().position(Vec3::new(0.0, 0.0, -5.0)),
+        RenderMesh::new(MeshHandle(cube), Color::RED),
+    ));
+
+    move |frame| {
+        // Query and update entities
+        for (_, transform) in frame.world.query::<&mut Transform>().iter() {
+            transform.rotation *= Quat::from_rotation_y(frame.dt);
+        }
+
+        // Render all entities with mesh components
+        frame.render_world();
+    }
+});
+```
+
+Built on [hecs](https://crates.io/crates/hecs) — a fast, minimal ECS. Use it for game objects, particles, or any dynamic entity management. The immediate-mode API still works alongside ECS.
+
 ### Immediate-Mode 2D
 
 ```rust
@@ -227,6 +254,7 @@ cargo run --example black_hole
 | `sprite_scaled(id, x, y, w, h)` | Draw sprite at custom size |
 | `sprite_scaled_tinted(id, x, y, w, h, tint)` | Draw scaled sprite with tint |
 | `sprite_region(id, x, y, w, h, sx, sy, sw, sh)` | Draw sprite sub-region |
+| `render_world()` | Render all ECS entities with `Transform` + `RenderMesh` |
 
 ### Frame Fields
 
@@ -236,6 +264,7 @@ cargo run --example black_hole
 | `dt` | `f32` | Delta time since last frame |
 | `input` | `&Input` | Keyboard and mouse state |
 | `camera` | `&mut Camera` | Current camera (modify to change view) |
+| `world` | `&mut World` | ECS world for entity management |
 | `gpu` | `&GpuContext` | Low-level GPU access |
 | `draw` | `&mut Draw2d` | Low-level 2D API |
 
@@ -275,6 +304,7 @@ Hoplite builds on solid foundations:
 - **wgpu** — Cross-platform GPU abstraction
 - **winit** — Window creation and input handling
 - **glam** — Fast math types (Vec3, Mat4, Quat)
+- **hecs** — Fast, minimal Entity Component System
 - **fontdue** — Font rasterization
 - **bytemuck** — Safe casting for GPU buffers
 - **image** — Image loading and handling
