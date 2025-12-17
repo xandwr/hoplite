@@ -1,5 +1,12 @@
 # Hoplite
 
+## Note:
+
+This is slightly opinionated, early, relatively-untested software I am mostly making for internal use right now.
+Grain of salt type shit.
+
+---
+
 **A creative coding framework for Rust that gets out of your way.**
 
 Write shaders, render 3D scenes, and build visualizations with a single closure. No boilerplate, no ceremony—just code for the screen.
