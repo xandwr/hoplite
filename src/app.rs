@@ -89,6 +89,7 @@ use crate::gpu::GpuContext;
 use crate::hot_shader::{HotEffectPass, HotPostProcessPass, HotWorldPostProcessPass};
 use crate::input::Input;
 use crate::mesh::{Mesh, Transform};
+use crate::picking::{self, PickResult, Ray, RayHit};
 use crate::post_process::{PostProcessPass, WorldPostProcessPass};
 use crate::render_graph::{
     EffectNode, HotEffectNode, HotPostProcessNode, HotWorldPostProcessNode, MeshNode, MeshQueue,
@@ -976,6 +977,9 @@ pub struct Frame<'a> {
 
     /// Shared mesh queue for 3D draw calls.
     mesh_queue: Rc<RefCell<MeshQueue>>,
+
+    /// Window handle for cursor control.
+    window: &'a Window,
 }
 
 impl Frame<'_> {
@@ -1015,6 +1019,48 @@ impl Frame<'_> {
     /// calculating aspect ratios.
     pub fn height(&self) -> u32 {
         self.gpu.height()
+    }
+
+    // ========================================================================
+    // Cursor Control
+    // ========================================================================
+
+    /// Capture and hide the mouse cursor for FPS-style controls.
+    ///
+    /// When captured, the cursor is hidden and confined to the window.
+    /// Mouse delta will continue to report movement. Call [`release_cursor`](Self::release_cursor)
+    /// to restore normal cursor behavior.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Capture cursor on click
+    /// if frame.input.mouse_pressed(MouseButton::Left) {
+    ///     frame.capture_cursor();
+    /// }
+    /// // Release on Escape
+    /// if frame.input.key_pressed(KeyCode::Escape) {
+    ///     frame.release_cursor();
+    /// }
+    /// ```
+    pub fn capture_cursor(&self) {
+        use winit::window::CursorGrabMode;
+        // Try confined mode first (keeps cursor in window), fall back to locked (hides cursor)
+        let _ = self
+            .window
+            .set_cursor_grab(CursorGrabMode::Confined)
+            .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Locked));
+        self.window.set_cursor_visible(false);
+    }
+
+    /// Release the mouse cursor, restoring normal behavior.
+    ///
+    /// This undoes [`capture_cursor`](Self::capture_cursor), showing the cursor
+    /// and allowing it to leave the window.
+    pub fn release_cursor(&self) {
+        use winit::window::CursorGrabMode;
+        let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+        self.window.set_cursor_visible(true);
     }
 
     // ========================================================================
@@ -1548,6 +1594,130 @@ impl Frame<'_> {
             }
         }
     }
+
+    // ========================================================================
+    // 3D Picking / Raycasting
+    // ========================================================================
+
+    /// Create a ray from the current mouse position for picking.
+    ///
+    /// This creates a ray that starts at the camera and passes through the
+    /// mouse cursor position in 3D space. Use this for custom raycasting
+    /// against game objects.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let ray = frame.mouse_ray();
+    /// // Test against custom geometry, planes, etc.
+    /// if let Some(t) = ray.intersect_aabb(min, max) {
+    ///     let hit_point = ray.point_at(t);
+    /// }
+    /// ```
+    pub fn mouse_ray(&self) -> Ray {
+        let mouse = self.input.mouse_position();
+        let aspect = self.gpu.width() as f32 / self.gpu.height() as f32;
+
+        Ray::from_screen(
+            mouse.x,
+            mouse.y,
+            self.gpu.width() as f32,
+            self.gpu.height() as f32,
+            self.camera.view_matrix(),
+            self.camera
+                .projection_matrix(aspect, self.camera.near, self.camera.far),
+        )
+    }
+
+    /// Cast a ray from the mouse and find the closest entity with a collider.
+    ///
+    /// This is the primary method for implementing mouse picking in your game.
+    /// It tests the ray against all entities that have both a `Transform` and
+    /// `Collider` component.
+    ///
+    /// # Returns
+    ///
+    /// The closest hit entity, or `None` if nothing was hit.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Check what the mouse is hovering over
+    /// if let Some(hit) = frame.pick_collider() {
+    ///     frame.text(10.0, 10.0, &format!("Entity: {:?}", hit.entity));
+    ///
+    ///     // Handle clicks
+    ///     if frame.input.mouse_pressed(MouseButton::Left) {
+    ///         // Select or interact with the entity
+    ///     }
+    /// }
+    /// ```
+    pub fn pick_collider(&self) -> PickResult {
+        let ray = self.mouse_ray();
+        picking::raycast(self.world, &ray)
+    }
+
+    /// Cast a ray from the mouse and find all entities with colliders.
+    ///
+    /// Like [`pick_collider`](Self::pick_collider), but returns all hits
+    /// sorted by distance (closest first). Useful for selection through
+    /// transparent objects or implementing "pick all in line" mechanics.
+    ///
+    /// # Returns
+    ///
+    /// A vector of all hits, sorted by distance (closest first).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let hits = frame.pick_collider_all();
+    /// for hit in hits {
+    ///     println!("Hit {:?} at distance {}", hit.entity, hit.distance);
+    /// }
+    /// ```
+    pub fn pick_collider_all(&self) -> Vec<RayHit> {
+        let ray = self.mouse_ray();
+        picking::raycast_all(self.world, &ray)
+    }
+
+    /// Cast a custom ray and find the closest entity with a collider.
+    ///
+    /// Use this when you need to cast rays from positions other than the mouse,
+    /// such as for AI line-of-sight or projectile trajectories.
+    ///
+    /// # Arguments
+    ///
+    /// * `ray` - The ray to cast
+    ///
+    /// # Returns
+    ///
+    /// The closest hit entity, or `None` if nothing was hit.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Check if enemy can see player
+    /// let ray = Ray::new(enemy_pos, (player_pos - enemy_pos).normalize());
+    /// if let Some(hit) = frame.raycast(&ray) {
+    ///     // Something is in the way
+    /// }
+    /// ```
+    pub fn raycast(&self, ray: &Ray) -> PickResult {
+        picking::raycast(self.world, ray)
+    }
+
+    /// Cast a custom ray and find all entities with colliders.
+    ///
+    /// # Arguments
+    ///
+    /// * `ray` - The ray to cast
+    ///
+    /// # Returns
+    ///
+    /// A vector of all hits, sorted by distance (closest first).
+    pub fn raycast_all(&self, ray: &Ray) -> Vec<RayHit> {
+        picking::raycast_all(self.world, ray)
+    }
 }
 
 /// Builder for configuring and drawing a 3D mesh.
@@ -2060,6 +2230,7 @@ impl ApplicationHandler for HopliteApp {
                     dt,
                     default_font: *default_font,
                     mesh_queue: Rc::clone(mesh_queue),
+                    window,
                 };
 
                 // Run user's frame function

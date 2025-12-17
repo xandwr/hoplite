@@ -46,12 +46,14 @@ mod camera;
 mod draw2d;
 mod ecs;
 mod effect_pass;
+mod freelook_camera;
 mod gpu;
 mod hot_shader;
 mod input;
 mod mesh;
 mod mesh_pass;
 mod orbit_camera;
+mod picking;
 mod post_process;
 mod render_graph;
 mod texture;
@@ -61,6 +63,7 @@ pub use assets::{Assets, FontAtlas, FontId};
 pub use camera::Camera;
 pub use draw2d::{Color, Draw2d, PanelBuilder, Rect, SpriteId};
 pub use effect_pass::EffectPass;
+pub use freelook_camera::{FreelookCamera, FreelookMode, SeatedConfig};
 pub use gpu::GpuContext;
 pub use hot_shader::{HotEffectPass, HotPostProcessPass, HotShader, HotWorldPostProcessPass};
 pub use input::Input;
@@ -85,3 +88,6 @@ pub use winit::keyboard::KeyCode;
 // ECS support and type-safe handles
 pub use ecs::{MeshHandle, MeshId, RenderMesh, TextureHandle, TextureId};
 pub use hecs::{Entity, World};
+
+// 3D picking and collision
+pub use picking::{Collider, PickResult, Ray, RayHit};
