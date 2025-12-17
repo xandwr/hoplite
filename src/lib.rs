@@ -33,6 +33,7 @@ mod app;
 mod assets;
 mod camera;
 mod draw2d;
+mod ecs;
 mod effect_pass;
 mod gpu;
 mod hot_shader;
@@ -69,3 +70,7 @@ pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 // Re-export commonly used winit types for convenience
 pub use winit::event::MouseButton;
 pub use winit::keyboard::KeyCode;
+
+// ECS support
+pub use ecs::{MeshHandle, RenderMesh, TextureHandle};
+pub use hecs::{Entity, World};

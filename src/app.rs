@@ -145,6 +145,8 @@ pub struct SetupContext<'a> {
     pub assets: &'a mut Assets,
     /// 2D drawing context for registering sprites.
     pub draw: &'a mut Draw2d,
+    /// ECS world for spawning entities during setup.
+    pub world: &'a mut hecs::World,
     /// Storage for the default font ID (set via [`Self::default_font`]).
     default_font: &'a mut Option<FontId>,
     /// The render graph being built (lazily initialized on first effect/pass).
@@ -886,6 +888,12 @@ pub struct Frame<'a> {
     /// so the same query returns the same result throughout a frame.
     pub input: &'a Input,
 
+    /// ECS world for entity management.
+    ///
+    /// Query and mutate entities each frame. Spawn new entities, update
+    /// components, or despawn entities based on game logic.
+    pub world: &'a mut hecs::World,
+
     /// Total elapsed time since application start, in seconds.
     ///
     /// Useful for animations and time-based effects. Continuously increases;
@@ -1358,6 +1366,58 @@ impl Frame<'_> {
         self.draw
             .sprite_region(sprite_id, x, y, w, h, src_x, src_y, src_w, src_h, tint);
     }
+
+    // ========================================================================
+    // ECS Rendering
+    // ========================================================================
+
+    /// Render all entities with [`Transform`](crate::Transform) and [`RenderMesh`](crate::RenderMesh) components.
+    ///
+    /// This queries the ECS world for entities with both components and queues
+    /// them for rendering. Call this during your frame update to render all
+    /// ECS-managed entities.
+    ///
+    /// Requires [`SetupContext::enable_mesh_rendering`] to be called during setup.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Setup:
+    /// ctx.enable_mesh_rendering();
+    /// let cube = ctx.mesh_cube();
+    ///
+    /// ctx.world.spawn((
+    ///     Transform::new().position(Vec3::new(0.0, 0.0, -5.0)),
+    ///     RenderMesh::new(MeshHandle(cube), Color::RED),
+    /// ));
+    ///
+    /// // Frame loop:
+    /// move |frame| {
+    ///     frame.render_world();
+    /// }
+    /// ```
+    pub fn render_world(&mut self) {
+        use crate::ecs::RenderMesh;
+        use crate::mesh::Transform;
+
+        for (_, (transform, render_mesh)) in self.world.query::<(&Transform, &RenderMesh)>().iter()
+        {
+            if let Some(texture) = render_mesh.texture {
+                self.mesh_queue.borrow_mut().draw_textured(
+                    render_mesh.mesh.0,
+                    *transform,
+                    render_mesh.color,
+                    texture.0,
+                );
+            } else {
+                self.mesh_queue.borrow_mut().draw(
+                    render_mesh.mesh.0,
+                    *transform,
+                    render_mesh.color,
+                );
+            }
+        }
+    }
 }
 
 /// Configuration options for creating a Hoplite application window.
@@ -1551,7 +1611,7 @@ where
 
     let mut app = HopliteApp::Pending {
         config,
-        setup: Some(Box::new(move |gpu, assets, draw, mesh_queue| {
+        setup: Some(Box::new(move |gpu, assets, draw, mesh_queue, world| {
             let mut default_font = None;
             let mut graph_builder = None;
 
@@ -1559,6 +1619,7 @@ where
                 gpu,
                 assets,
                 draw,
+                world,
                 default_font: &mut default_font,
                 graph_builder: &mut graph_builder,
                 mesh_queue,
@@ -1589,6 +1650,7 @@ type SetupFn = Box<
         &mut Assets,
         &mut Draw2d,
         &Rc<RefCell<MeshQueue>>,
+        &mut hecs::World,
     ) -> (
         Box<dyn FnMut(&mut Frame)>,
         Option<FontId>,
@@ -1629,6 +1691,8 @@ enum HopliteApp {
         camera: Camera,
         /// Input state (keyboard, mouse).
         input: Input,
+        /// ECS world for entity management.
+        world: hecs::World,
         /// User's frame closure (called every frame).
         frame_fn: Box<dyn FnMut(&mut Frame)>,
         /// Default font ID if one was set during setup.
@@ -1670,10 +1734,13 @@ impl ApplicationHandler for HopliteApp {
             // Create shared mesh queue for 3D rendering
             let mesh_queue = Rc::new(RefCell::new(MeshQueue::new()));
 
+            // Create ECS world
+            let mut world = hecs::World::new();
+
             // Run user's setup closure to get the frame function
             let setup_fn = setup.take().unwrap();
             let (frame_fn, default_font, render_graph) =
-                setup_fn(&gpu, &mut assets, &mut draw_2d, &mesh_queue);
+                setup_fn(&gpu, &mut assets, &mut draw_2d, &mesh_queue, &mut world);
 
             *self = HopliteApp::Running {
                 window,
@@ -1682,6 +1749,7 @@ impl ApplicationHandler for HopliteApp {
                 draw_2d,
                 camera: Camera::new(),
                 input: Input::new(),
+                world,
                 frame_fn,
                 default_font,
                 render_graph,
@@ -1708,6 +1776,7 @@ impl ApplicationHandler for HopliteApp {
             draw_2d,
             camera,
             input,
+            world,
             frame_fn,
             default_font,
             render_graph,
@@ -1748,6 +1817,7 @@ impl ApplicationHandler for HopliteApp {
                     draw: draw_2d,
                     camera,
                     input,
+                    world,
                     time,
                     dt,
                     default_font: *default_font,
